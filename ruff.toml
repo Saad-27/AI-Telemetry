@@ -1,0 +1,9 @@
+# Shared lint/format config. Each package's pyproject extends this, so ruff
+# infers the target Python version from that package's requires-python.
+line-length = 100
+
+[lint]
+select = ["E", "W", "F", "I", "B", "UP", "S", "SIM", "RUF"]
+
+[lint.per-file-ignores]
+"**/tests/**" = ["S101", "S603"]

@@ -1,0 +1,33 @@
+# Local development stack. Ports bind to 127.0.0.1 only.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: app
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  server:
+    build: ./server
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    environment:
+      DATABASE_URL: postgresql://app:${POSTGRES_PASSWORD:-app}@postgres:5432/app
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./server/app:/srv/app:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

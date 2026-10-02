@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yourpkg"
+version = "0.0.0"
+description = "Passive reliability metrics for the AI model calls your app already makes. Metadata only."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+# Zero runtime dependencies is a hard requirement (brief §6.7, §11.7).
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Typing :: Typed",
+]
+
+[dependency-groups]
+dev = ["pytest", "mypy", "ruff"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yourpkg"]
+
+[tool.ruff]
+extend = "../../ruff.toml"
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
