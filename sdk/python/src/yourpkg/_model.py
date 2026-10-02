@@ -5,6 +5,7 @@ Every field is metadata. Nothing here can hold prompt, output, key or URL text.
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from bisect import bisect_left
@@ -12,6 +13,22 @@ from dataclasses import dataclass, field
 from typing import NamedTuple
 
 SCHEMA_VERSION = 1
+
+PROVIDERS = frozenset(
+    {
+        "openai", "anthropic", "google", "mistral", "groq", "deepseek", "openrouter",
+        "together", "fireworks", "xai", "meta", "amazon", "custom", "local",
+    }
+)  # fmt: skip
+ROUTES = frozenset(
+    {"direct", "azure", "bedrock", "vertex", "gemini_api", "openai_compatible", "custom", "local"}
+)
+
+# Same limits the server enforces (brief §6.4). fullmatch, so a trailing newline can't slip by.
+valid_model = re.compile(r"[A-Za-z0-9._:/@+-]{1,128}").fullmatch
+valid_tag = re.compile(r"[A-Za-z0-9._:-]{1,64}").fullmatch
+valid_error_code = re.compile(r"[a-z_]{1,64}").fullmatch
+MAX_TOKENS = 10_000_000
 
 # Upper bounds of the fixed histogram buckets; each histogram has one more bucket for +inf.
 # The bounds are part of the protocol: changing them needs a new SCHEMA_VERSION.
