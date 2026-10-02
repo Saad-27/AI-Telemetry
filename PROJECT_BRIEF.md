@@ -553,7 +553,7 @@ These are targets. Measure and publish the real numbers, which are also good int
 ### 7.1 Features
 
 1. Sign-in with GitHub or Google OAuth.
-2. Projects. Placeholder limit: 3 per account.
+2. Projects. Limit: 1 per account (D7).
 3. Ingest keys: create (shown once), list (prefix and last 4 characters, created date, last used), revoke. Multiple keys per project allow zero-downtime rotation.
 4. Python SDK with passive capture (Section 6).
 5. Onboarding wizard with a live "waiting for first call" check.
@@ -568,7 +568,7 @@ These are targets. Measure and publish the real numbers, which are also good int
 9. **Health badges**, display only with no notifications. Rules in 7.3.
 10. **"Whose side?" hints** for each error class (Section 6.5).
 11. **Official provider status:** a banner for active incidents on providers the project uses, plus an incident timeline.
-12. **Anonymised global baseline** ("you vs everyone"), with a sharing toggle per project.
+12. ~~**Anonymised global baseline** ("you vs everyone"), with a sharing toggle per project.~~ Dropped (D6): official status pages are the comparison signal.
 13. **Filters:** service, environment, route, origin region.
 14. **Deletion:** delete a project or the whole account, which hard-deletes the data.
 
@@ -580,7 +580,7 @@ All numbers are placeholders (Section 16).
 |---|---|
 | Calls measured per account | 1M/month (cheap to serve because of Section 19) |
 | Retention | 7 days (summaries, samples and rollups) |
-| Projects | 3 |
+| Projects | 1 (D7) |
 
 **Over quota**
 
@@ -1398,7 +1398,7 @@ Build in this order. Each milestone must meet its "done when" criteria before mo
 | **M3** | Ingest and storage | Ingest API, key hashing and cache, validation and limits, partitions, append-only inserts of summaries and samples, rollup worker merging summaries, retention job, Prometheus metrics, load test with results in `docs/capacity.md` (Section 20.6) | Example app → rows → correct rollups end to end. Malformed, oversized, zip-bomb and invalid-key tests pass. Load-test number recorded |
 | **M4** | Web app core | OAuth, sessions, projects, keys, onboarding with first-event check, overview, live feed, model detail, badges, hints, settings, deletion | A new user goes from signup to first event on the dashboard in under 5 minutes. IDOR suite passes. Headers verified |
 | **M5** | Official status | Poller adapters, component mapping, banner, chart shading, incidents page | At least OpenAI, Anthropic, Google, AWS and Azure sources ingesting, with incidents visible on the right charts |
-| **M6** | Global baseline | 5-minute and 1-hour global rollups, P6 enforcement, overlay and vs-everyone indicator, sharing toggle | k and dominance tests pass, and the toggle excludes a project from future aggregates |
+| ~~**M6**~~ | ~~Global baseline~~ **Dropped (D6)** | 5-minute and 1-hour global rollups, P6 enforcement, overlay and vs-everyone indicator, sharing toggle | k and dominance tests pass, and the toggle excludes a project from future aggregates |
 | **M7** | Hardening and launch | Section 11.11 checklist, Terraform for production, CD to production, own observability, docs, landing and legal pages, PyPI 0.1.0, private alpha | Every checklist item ticked and alpha users onboarded successfully |
 
 **Later (still free tier)**
@@ -1447,20 +1447,22 @@ Build in this order. Each milestone must meet its "done when" criteria before mo
 
 Ask Saad about each of these. Use the default only if he says so.
 
-| # | Decision | Options | Default |
-|---|---|---|---|
-| D1 | Product, domain and package name | n/a | Check PyPI, npm, the domain, a GitHub org and trademark conflicts before choosing |
-| D2 | Hosting | **Fly.io:** familiar, fastest to ship. **AWS:** ECS Fargate or App Runner, or Lambda + API Gateway for ingest, plus RDS. Fills the AWS CV gap but takes more setup | Fly.io for the MVP, with Terraform for Cloudflare and the database. Revisit AWS for ingest as a later learning extension. **If AWS experience matters more than speed, choose AWS now** |
-| D3 | Database layout | Plain Postgres partitioning plus our own rollups, or TimescaleDB | Plain Postgres: portable and teaches more. Keep the repository layer |
-| D4 | Frontend | React + Vite SPA, or Next.js | React + Vite SPA, with FastAPI handling auth |
-| D5 | Licences | SDK: Apache-2.0 or MIT. Server: closed, AGPL or source-available | SDK Apache-2.0. Server repo private until launch, decide then |
-| D6 | Global sharing default | On with clear disclosure and opt-out, or opt-in | On by default, explained during onboarding, one-click opt-out |
-| D7 | Free-tier limits | n/a | 1M calls measured/month per account, 7-day retention, 3 projects |
-| D8 | Wire format: per-call events or client-side aggregation | Every call sent individually, or per-minute summaries plus errors and a sample | **Summaries plus errors and a sample (Section 19).** Decide before the first SDK release, because the wire format is the hardest thing to change once old SDK versions are installed in users' apps |
-| D9 | Live feed transport | Polling or SSE | Polling every 3-5 s for the MVP |
-| D10 | Postgres Row-Level Security | Add RLS, or app-level scoping only | App-level scoping plus IDOR tests in the MVP. Add RLS in M7 if time allows |
-| D11 | Minimum Python version | 3.9, 3.10, 3.11 | 3.10+ |
-| D12 | Hosting region | London, Frankfurt, Amsterdam | **Frankfurt or Amsterdam**, so "EU-hosted" is literally true. London is outside the EU, though the UK has an EU adequacy decision |
+> **Resolved 2 October 2026.** Outcomes are in the last column; rationale in [ADR 0001](docs/decisions/0001-open-decisions.md).
+
+| # | Decision | Options | Default | **Outcome** |
+|---|---|---|---|---|
+| D1 | Product, domain and package name | n/a | Check PyPI, npm, the domain, a GitHub org and trademark conflicts before choosing | Placeholders for now |
+| D2 | Hosting | **Fly.io:** familiar, fastest to ship. **AWS:** ECS Fargate or App Runner, or Lambda + API Gateway for ingest, plus RDS. Fills the AWS CV gap but takes more setup | Fly.io for the MVP, with Terraform for Cloudflare and the database. Revisit AWS for ingest as a later learning extension. **If AWS experience matters more than speed, choose AWS now** | Fly.io |
+| D3 | Database layout | Plain Postgres partitioning plus our own rollups, or TimescaleDB | Plain Postgres: portable and teaches more. Keep the repository layer | Plain Postgres |
+| D4 | Frontend | React + Vite SPA, or Next.js | React + Vite SPA, with FastAPI handling auth | Vite + Preact + TS + uPlot SPA |
+| D5 | Licences | SDK: Apache-2.0 or MIT. Server: closed, AGPL or source-available | SDK Apache-2.0. Server repo private until launch, decide then | SDK Apache-2.0, server private |
+| D6 | Global sharing default | On with clear disclosure and opt-out, or opt-in | On by default, explained during onboarding, one-click opt-out | **Official status only; crowd baseline dropped** |
+| D7 | Free-tier limits | n/a | 1M calls measured/month per account, 7-day retention, 3 projects | **Per account: 1 project**, 1M calls/month, 7 days |
+| D8 | Wire format: per-call events or client-side aggregation | Every call sent individually, or per-minute summaries plus errors and a sample | **Summaries plus errors and a sample (Section 19).** Decide before the first SDK release, because the wire format is the hardest thing to change once old SDK versions are installed in users' apps | Summaries + errors + sample |
+| D9 | Live feed transport | Polling or SSE | Polling every 3-5 s for the MVP | Polling |
+| D10 | Postgres Row-Level Security | Add RLS, or app-level scoping only | App-level scoping plus IDOR tests in the MVP. Add RLS in M7 if time allows | App scoping + IDOR tests + RLS on tenant tables |
+| D11 | Minimum Python version | 3.9, 3.10, 3.11 | 3.10+ | 3.10+ |
+| D12 | Hosting region | London, Frankfurt, Amsterdam | **Frankfurt or Amsterdam**, so "EU-hosted" is literally true. London is outside the EU, though the UK has an EU adequacy decision | Frankfurt (`fra`) |
 
 ---
 

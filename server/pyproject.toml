@@ -1,0 +1,27 @@
+[project]
+name = "server"
+version = "0.0.0"
+description = "Ingest and dashboard API"
+requires-python = ">=3.12"
+dependencies = ["fastapi", "uvicorn", "asyncpg"]
+
+[dependency-groups]
+dev = ["pytest", "httpx2", "mypy", "ruff"]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+extend = "../ruff.toml"
+
+[tool.mypy]
+strict = true
+files = ["app", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["asyncpg", "asyncpg.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
