@@ -33,3 +33,4 @@ files = ["src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["sender: run the real background sender thread"]

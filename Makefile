@@ -2,7 +2,7 @@ SDK    := sdk/python
 SERVER := server
 PKGS   := $(SDK) $(SERVER)
 
-.PHONY: dev down db test lint fmt
+.PHONY: dev down db test lint fmt bench
 
 dev:  ## Postgres + server (with reload) on 127.0.0.1:8000
 	docker compose up --build
@@ -23,3 +23,6 @@ lint:
 
 fmt:
 	@for d in $(PKGS); do (cd $$d && uv run ruff check --fix . && uv run ruff format .) || exit 1; done
+
+bench:  ## SDK call-path overhead against the budget in brief §6.8
+	cd $(SDK) && uv run python tests/bench_overhead.py
