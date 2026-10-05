@@ -36,6 +36,16 @@ def test_track_records_a_streaming_call() -> None:
     assert call.ttft_ms is not None and call.ttft_ms <= call.duration_ms
 
 
+def test_set_usage_merges_partial_updates() -> None:
+    yourpkg.init(api_key=KEY)
+    with yourpkg.track(provider="custom", model="m", streaming=True) as t:
+        t.set_usage(input_tokens=100, cached_input_tokens=20)
+        t.set_usage(output_tokens=50)
+        t.set_usage(output_tokens=-1)  # invalid: ignored, keeps 50
+    call = samples()[0].call
+    assert (call.input_tokens, call.output_tokens, call.cached_input_tokens) == (100, 50, 20)
+
+
 def test_exception_is_recorded_and_reraised_unchanged() -> None:
     yourpkg.init(api_key=KEY)
     err = TimeoutError("SENTINEL_OUTPUT_91c2")

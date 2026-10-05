@@ -70,13 +70,18 @@ class Tracker:
         output_tokens: int | None = None,
         cached_input_tokens: int | None = None,
     ) -> None:
+        """Merge usage counts. Fields left as None (or invalid) keep their earlier value,
+        so streams can report input and output tokens in separate calls."""
         call = self._call
         if call is None:
             return
         try:
-            call.input_tokens = _count(input_tokens)
-            call.output_tokens = _count(output_tokens)
-            call.cached_input_tokens = _count(cached_input_tokens)
+            if (n := _count(input_tokens)) is not None:
+                call.input_tokens = n
+            if (n := _count(output_tokens)) is not None:
+                call.output_tokens = n
+            if (n := _count(cached_input_tokens)) is not None:
+                call.cached_input_tokens = n
         except Exception:  # noqa: S110 (fail open, P4)
             pass
 
