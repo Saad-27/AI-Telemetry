@@ -1598,7 +1598,7 @@ This section defines the **wire format**, meaning what the SDK sends. It must be
   "cancelled": 1,
   "errors": { "overloaded": 2 },
   "ttft_hist":     [0,0,0,0,1,3,12,40,59,3,0,0,0,0,0,0,0,0,0,0],
-  "duration_hist": [0,0,0,0,0,0,0,0,0,0,2,9,51,44,12,2,0,0,0,0],
+  "duration_hist": [0,0,0,0,0,0,0,0,0,0,2,9,51,43,11,1,0,0,0,0],
   "decode_hist":   [0,0,0,0,1,6,48,55,7,0,0,0,0,0],
   "input_tokens_sum": 512340,
   "output_tokens_sum": 48211,
@@ -1612,6 +1612,7 @@ This section defines the **wire format**, meaning what the SDK sends. It must be
 - **`model`** is the model returned by the provider, or the requested model if none was returned.
 - **Histograms** use the fixed bucket boundaries in Section 9.4, giving 20 latency buckets and 14 decode-rate buckets.
   - A call is counted only in histograms that apply to it. For example, calls that fail before the first token have no TTFT.
+  - `duration_hist` counts successful calls only, `ttft_hist` any call that reached a first token, `decode_hist` qualifying successful streams. Bucket bounds are upper-inclusive. See [ADR 0003](docs/decisions/0003-sdk-wire-semantics.md).
   - The boundaries are part of the protocol. Changing them means a new `schema_version`, and the server must support both versions.
 - **The envelope** (Section 6.4) carries both arrays: `"summaries": [...]` and `"samples": [...]`.
 
