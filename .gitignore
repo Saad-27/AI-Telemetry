@@ -10,3 +10,10 @@ build/
 *.egg-info/
 node_modules/
 .DS_Store
+# Terraform (the provider lock file .terraform.lock.hcl IS committed)
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+# Local-only deployment planning notes, never committed
+docs/decisions/DEPLOYMENT_PLAN.md

@@ -13,6 +13,8 @@ collected. See [PROJECT_BRIEF.md](PROJECT_BRIEF.md) for the full design.
 | `sdk/python/` | `yourpkg` Python SDK (Apache-2.0, zero runtime dependencies, Python 3.10+) |
 | `server/` | FastAPI service (Python 3.12). Currently `/healthz` and `/readyz` only |
 | `docs/decisions/` | Architecture decision records |
+| `deploy/fly/` | Fly.io app config per environment |
+| `infra/terraform/` | Cloudflare DNS, TLS and firewall (Terraform) |
 | `compose.yaml` | Local Postgres 17 and the server |
 
 ## Development
@@ -25,3 +27,8 @@ make test   # starts compose Postgres (unless DATABASE_URL is set), runs all tes
 make lint   # ruff check, ruff format --check, mypy --strict
 make fmt    # auto-fix lint and formatting
 ```
+
+## Deployment
+
+Every green merge to `main` deploys to staging. Setup, secrets and operations:
+[docs/deploy.md](docs/deploy.md).

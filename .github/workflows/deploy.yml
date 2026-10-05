@@ -1,0 +1,86 @@
+name: Deploy
+
+# Runs only after the CI workflow passes for a push to main, so every deployed commit has
+# been linted and tested. ADR 0005 explains the flow; docs/deploy.md lists the settings it needs.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: # manual redeploy of main
+
+permissions:
+  contents: read
+
+# One deploy at a time, and never cancel one halfway through.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  staging:
+    # Off until the STAGING_ENABLED repo variable is "true" (after docs/deploy.md setup).
+    # workflow_run fires for pull requests too, and `branches` matches a fork's branch named
+    # "main", so also require a push from this repository.
+    if: >-
+      vars.STAGING_ENABLED == 'true' && (
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: ${{ vars.PUBLIC_URL }}
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+      - name: Deploy
+        # --ha=false: one machine is enough for staging.
+        run: >-
+          flyctl deploy server
+          --config "$GITHUB_WORKSPACE/deploy/fly/staging.toml"
+          --remote-only --ha=false
+          --image-label "git-${SHA::12}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Smoke test
+        # /readyz also proves the app can reach its database.
+        run: curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors "$PUBLIC_URL/readyz"
+        env:
+          PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+
+  production:
+    needs: staging
+    # Dormant until M7. Once enabled, the `production` environment's required reviewer
+    # (you) must approve each run in the Actions tab before it starts.
+    if: vars.PRODUCTION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.PUBLIC_URL }}
+    env:
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+      - name: Deploy
+        run: >-
+          flyctl deploy server
+          --config "$GITHUB_WORKSPACE/deploy/fly/production.toml"
+          --remote-only
+          --image-label "git-${SHA::12}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Smoke test
+        run: curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors "$PUBLIC_URL/readyz"
+        env:
+          PUBLIC_URL: ${{ vars.PUBLIC_URL }}

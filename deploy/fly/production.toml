@@ -1,0 +1,38 @@
+# Production. Deployed only after staging succeeds AND you approve it in GitHub
+# (the `production` environment). Dormant until the PRODUCTION_ENABLED repo variable is
+# "true" (M7). Same image as staging; only sizing and idle behaviour differ.
+
+app = "gaslit-api-production"
+primary_region = "fra" # D12: EU-hosted
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Added in M3, when Alembic exists.
+# [deploy]
+#   release_command = "alembic upgrade head"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Always keep one machine warm so the first dashboard visit or SDK batch is not slowed by a
+  # cold start. `fly deploy` creates a second machine by default for availability.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    timeout = "3s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

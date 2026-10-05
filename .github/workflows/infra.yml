@@ -1,0 +1,95 @@
+name: Infra
+
+# Terraform for Cloudflare (infra/terraform). PRs: format, validate and plan (the plan shows
+# in the run summary). Merges to main: apply, after you approve the `infra` environment.
+# Plan and apply stay off until the INFRA_ENABLED repo variable is "true" (docs/deploy.md).
+on:
+  pull_request:
+    paths: [infra/terraform/**, .github/workflows/infra.yml]
+  push:
+    branches: [main]
+    paths: [infra/terraform/**, .github/workflows/infra.yml]
+
+permissions:
+  contents: read
+
+# Never run two Terraform operations against the same state at once.
+concurrency:
+  group: infra
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash # explicit, so pipelines fail if any command fails (pipefail)
+    working-directory: infra/terraform
+
+env:
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.x
+          terraform_wrapper: false
+      - run: terraform fmt -check -recursive -diff
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  plan:
+    needs: check
+    # Secrets are not available to PRs from forks, so only plan PRs from this repository.
+    if: >-
+      vars.INFRA_ENABLED == 'true' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.R2_ENDPOINT }}
+      TF_VAR_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.x
+          terraform_wrapper: false
+      - run: terraform init
+      - name: Plan
+        # -lock=false: a plan only reads state. Output goes to the run summary.
+        run: |
+          terraform plan -lock=false -no-color | tee plan.txt
+          { echo '### Terraform plan'; echo '```'; cat plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    needs: check
+    if: vars.INFRA_ENABLED == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: infra # required reviewer: you approve before it runs
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.R2_ENDPOINT }}
+      TF_VAR_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.x
+          terraform_wrapper: false
+      - run: terraform init
+      - run: terraform plan -no-color -out=tfplan
+      - run: terraform apply -no-color tfplan

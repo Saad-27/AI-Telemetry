@@ -1,0 +1,41 @@
+# Staging. Deployed automatically after CI passes on main (.github/workflows/deploy.yml).
+# Until M3 splits ingest and web-api into separate apps, this one app serves both
+# hostnames. Secrets (DATABASE_URL, ...) are never in this file: set them with
+# `fly secrets set -a gaslit-api-staging`. See docs/deploy.md.
+
+app = "gaslit-api-staging"
+primary_region = "fra" # D12: EU-hosted
+
+[build]
+  # Relative to the directory passed to `fly deploy` (server/), which is also the build context.
+  dockerfile = "Dockerfile"
+
+# Added in M3, when Alembic exists: migrations run once per deploy, before new machines start.
+# [deploy]
+#   release_command = "alembic upgrade head"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Staging scales to zero when idle, so it costs almost nothing between tests.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+  # Liveness only. /readyz (database reachable) is checked by the deploy smoke test instead,
+  # so a database blip does not make Fly restart healthy machines.
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "15s"
+    timeout = "3s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
