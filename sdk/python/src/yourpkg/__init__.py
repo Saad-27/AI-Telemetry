@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 __version__ = "0.0.0"
 
-__all__ = ["__version__", "init", "track"]
+__all__ = ["__version__", "flush", "init", "shutdown", "track"]
 
 
 def init(
@@ -51,6 +51,30 @@ def init(
             max_samples_per_minute=max_samples_per_minute,
             origin_region=origin_region,
         )
+    except Exception:  # noqa: S110 (fail open, P4)
+        pass
+
+
+def flush(timeout: float = 2.0) -> None:
+    """Send everything measured so far, waiting up to ``timeout`` seconds.
+
+    For scripts and serverless handlers, whose background threads may be frozen or
+    killed before the next scheduled send. Never raises.
+    """
+    try:
+        from . import _runtime
+
+        _runtime.flush(timeout)
+    except Exception:  # noqa: S110 (fail open, P4)
+        pass
+
+
+def shutdown(timeout: float = 2.0) -> None:
+    """Flush, then stop measuring. Registered with ``atexit`` by ``init()``. Never raises."""
+    try:
+        from . import _runtime
+
+        _runtime.shutdown(timeout)
     except Exception:  # noqa: S110 (fail open, P4)
         pass
 

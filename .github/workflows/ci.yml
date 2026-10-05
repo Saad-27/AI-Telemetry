@@ -35,6 +35,8 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run pytest -q
+      - name: Overhead benchmark (brief §6.8)
+        run: uv run python tests/bench_overhead.py
 
   server:
     runs-on: ubuntu-latest
