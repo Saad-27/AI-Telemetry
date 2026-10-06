@@ -11,7 +11,7 @@ depend on them, so they are recorded here at M0. The brief's §16 table now link
 
 | # | Decision | Outcome |
 |---|---|---|
-| D1 | Name | Keep placeholders (`yourpkg`, `YOURPKG_KEY`, `rm_live_`, `<domain>`) until PyPI, npm, domain and trademark checks are done |
+| D1 | Name | **Gaslit** (`gaslit.dev`), decided 2026-10-05 in [ADR 0005](0005-deployment.md). Code placeholders are renamed in a separate PR |
 | D2 | Hosting | Fly.io, with Terraform for Cloudflare and the database. AWS stays a later learning extension |
 | D3 | Database | Plain Postgres: native day partitions, our own rollups, queries behind a repository layer |
 | D4 | Frontend | Vite + **Preact** + TypeScript (strict) + **uPlot**, built as a static SPA. FastAPI handles auth. Scaffolded in M4 |
