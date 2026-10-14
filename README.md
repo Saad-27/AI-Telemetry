@@ -30,5 +30,5 @@ make fmt    # auto-fix lint and formatting
 
 ## Deployment
 
-Every green merge to `main` deploys to staging. Setup, secrets and operations:
-[docs/deploy.md](docs/deploy.md).
+Every green merge to `main` deploys to production after you approve it. Setup, secrets and
+operations: [docs/deploy.md](docs/deploy.md).

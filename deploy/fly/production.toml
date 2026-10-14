@@ -1,14 +1,17 @@
-# Production. Deployed only after staging succeeds AND you approve it in GitHub
-# (the `production` environment). Dormant until the PRODUCTION_ENABLED repo variable is
-# "true" (M7). Same image as staging; only sizing and idle behaviour differ.
+# Production, the only hosted environment (ADR 0006). Deployed after CI passes on main AND
+# you approve the run in GitHub (the `production` environment). Off until the
+# PRODUCTION_ENABLED repo variable is "true". Until M3 splits ingest and web-api into separate
+# apps, this one app serves both hostnames. Secrets (DATABASE_URL, ...) are never in this
+# file: set them with `fly secrets set -a gaslit-api-production`. See docs/deploy.md.
 
 app = "gaslit-api-production"
 primary_region = "fra" # D12: EU-hosted
 
 [build]
+  # Relative to the directory passed to `fly deploy` (server/), which is also the build context.
   dockerfile = "Dockerfile"
 
-# Added in M3, when Alembic exists.
+# Added in M3, when Alembic exists: migrations run once per deploy, before new machines start.
 # [deploy]
 #   release_command = "alembic upgrade head"
 
@@ -26,6 +29,8 @@ primary_region = "fra" # D12: EU-hosted
     soft_limit = 200
     hard_limit = 250
 
+  # Liveness only. /readyz (database reachable) is checked by the deploy smoke test instead,
+  # so a database blip does not make Fly restart healthy machines.
   [[http_service.checks]]
     grace_period = "10s"
     interval = "15s"
