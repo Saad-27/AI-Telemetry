@@ -1,4 +1,4 @@
-# Project Brief: LLM Reliability Monitor (working name)
+# Project Brief: Gaslit
 
 > **Owner:** Muhammad Saad
 > **Written:** 1 October 2026, distilled from a long planning conversation
@@ -13,15 +13,15 @@
 - **Privacy invariants (Section 5) and security requirements (Section 11) are non-negotiable.** If a task or shortcut conflicts with them, stop and ask Saad.
 - **Open decisions (Section 16):** ask Saad before choosing. Each one has a recommended default to use if he says "go with the default".
 - **Facts to verify (Section 17):** SDK internals, header names, status-page formats and similar details change often. Check current docs before relying on anything listed there.
-- **Placeholders** (replace once a name is chosen):
+- **Names** (D1, decided 2026-10-05, ADR 0005):
 
-  | Placeholder | Meaning |
+  | Name | Meaning |
   |---|---|
-  | `<Product>` | Product name |
-  | `yourpkg` | Python package / import name |
-  | `YOURPKG_KEY` | Environment variable holding the ingest key |
-  | `rm_live_` | Ingest key prefix |
-  | `<domain>` | Website domain (`app.<domain>`, `ingest.<domain>`) |
+  | `Gaslit` | Product name |
+  | `gaslit` | Python package / import name |
+  | `GASLIT_KEY` | Environment variable holding the ingest key |
+  | `gl_live_` | Ingest key prefix |
+  | `gaslit.dev` | Website domain (`app.gaslit.dev`, `ingest.gaslit.dev`) |
 
 - **Working style:** Saad wants to understand and be able to explain every part of this system in job interviews.
   - Record every non-trivial technical choice as a short ADR in `docs/decisions/NNNN-title.md`, with context, options considered, decision and trade-offs.
@@ -35,7 +35,7 @@
 
 ## 1. Summary
 
-<Product> is an **open-source SDK plus a hosted dashboard**. It tells developers whether the AI models their app depends on are healthy, slow or failing, **measured from the app's own real traffic**.
+Gaslit is an **open-source SDK plus a hosted dashboard**. It tells developers whether the AI models their app depends on are healthy, slow or failing, **measured from the app's own real traffic**.
 
 **How the developer sets it up**
 
@@ -128,19 +128,19 @@ This section exists so the agent does not drift back to ideas that were already 
 
 ### 4.1 User journey (free tier)
 
-1. **Sign up** on `app.<domain>` with GitHub or Google OAuth. There are no passwords.
+1. **Sign up** on `app.gaslit.dev` with GitHub or Google OAuth. There are no passwords.
 2. **Create a project**, for example `my-chat-app`. Use one project per app, or one project with a `service` tag per component.
-3. **Copy the ingest key.** It is shown once only, for example `rm_live_8f3k...`.
+3. **Copy the ingest key.** It is shown once only, for example `gl_live_8f3k...`.
 4. **Install and initialise:**
 
    ```bash
-   pip install yourpkg
-   export YOURPKG_KEY=rm_live_8f3k...
+   pip install gaslit
+   export GASLIT_KEY=gl_live_8f3k...
    ```
 
    ```python
-   import yourpkg
-   yourpkg.init(service="summariser", environment="prod")  # reads YOURPKG_KEY from the environment
+   import gaslit
+   gaslit.init(service="summariser", environment="prod")  # reads GASLIT_KEY from the environment
    ```
 
 5. **Run the app as normal.** The onboarding screen polls and shows "✓ First call received from `claude-…`" within seconds.
@@ -153,14 +153,14 @@ This section exists so the agent does not drift back to ideas that were already 
 ```
 ┌──────────────────────── user's server ────────────────────────┐
 │  app code ──► openai / anthropic / ... SDK call               │
-│                  ▲  wrapped by yourpkg (timings, usage,        │
+│                  ▲  wrapped by gaslit (timings, usage,        │
 │                  │  status — NO content)                       │
 │                  └─► per-minute summaries + sampled calls      │
 │                         └─► background thread: samples ~5 s,   │
 │                             summaries once a minute (gzip)     │
 └───────────────────────────────┬────────────────────────────────┘
                                 │ HTTPS POST /v1/ingest
-                                │ Authorization: Bearer rm_live_...
+                                │ Authorization: Bearer gl_live_...
                                 ▼
                      ┌─────────────────────┐
                      │ Ingest API (FastAPI)│  validate key hash → project
@@ -184,7 +184,7 @@ This section exists so the agent does not drift back to ideas that were already 
 
 | # | Component | Responsibility |
 |---|---|---|
-| 1 | **Python SDK** (`yourpkg`) | Wraps provider SDK calls and measures them. Folds measurements into per-minute summaries and ships those plus errors and a small sample of calls (Section 19). Zero runtime dependencies. Fails open |
+| 1 | **Python SDK** (`gaslit`) | Wraps provider SDK calls and measures them. Folds measurements into per-minute summaries and ships those plus errors and a small sample of calls (Section 19). Zero runtime dependencies. Fails open |
 | 2 | **Ingest API** | Authenticates the write-only key, validates and stores events. Stateless and horizontally scalable |
 | 3 | **Database** | Summary records and sampled calls (short retention), 1-minute rollups, global rollups, accounts and keys, official status data |
 | 4 | **Rollup worker** | Adds up the summary records from all of a project's app processes into per-minute rollups (mergeable histograms). Builds the anonymised global baseline |
@@ -215,7 +215,7 @@ Privacy is a core selling point, so treat it as a product feature, not just a ru
 | **P2** | Hostnames only, and only for known public providers | Known provider hosts are sent as-is, with customer-specific subdomains stripped (for example `mycompany.openai.azure.com` → `openai.azure.com`). Local and private hosts are sent as route `local`, and any other host as route `custom`, **with no hostname at all**. Users can add their own label |
 | **P3** | No extra calls, and never modify the user's requests or responses | For example, do **not** inject OpenAI's `stream_options={"include_usage": True}`. It adds a final chunk with an empty `choices` list, which breaks user code that reads `chunk.choices[0]` |
 | **P4** | Fail open | The SDK never raises into user code and never blocks the call path. Memory is bounded and data is dropped rather than causing harm (Section 6.7) |
-| **P5** | Transparency | `yourpkg.init(debug=True)` prints every payload locally before sending. `PRIVACY.md` documents every field. The SDK is open source |
+| **P5** | Transparency | `gaslit.init(debug=True)` prints every payload locally before sending. `PRIVACY.md` documents every field. The SDK is open source |
 | **P6** | The global comparison cannot reveal any one user | Global views show only normalised metrics (latency percentiles, error rates), **never call volumes**. A global cell is shown only when it has **≥ 5 distinct projects** in the window **and** no single project contributes more than 50% of its samples. `custom` and `local` routes are excluded. Projects can opt out |
 | **P7** | No remote control of the SDK | Server responses can only accept, reject or ask the SDK to slow down. The server can never change what the SDK captures or make it run code |
 
@@ -226,13 +226,13 @@ Privacy is a core selling point, so treat it as a product feature, not just a ru
 ### 6.1 Public API
 
 ```python
-yourpkg.init(
-    api_key=None,          # default: env YOURPKG_KEY
+gaslit.init(
+    api_key=None,          # default: env GASLIT_KEY
     service=None,          # user tag, e.g. "summariser"
     environment=None,      # user tag, e.g. "prod"
-    endpoint="https://ingest.<domain>",  # env YOURPKG_ENDPOINT (for local dev / self-host)
-    enabled=True,          # env YOURPKG_ENABLED=false is a kill switch: no patching at all
-    debug=False,           # env YOURPKG_DEBUG: print every payload locally before sending
+    endpoint="https://ingest.gaslit.dev",  # env GASLIT_ENDPOINT (for local dev / self-host)
+    enabled=True,          # env GASLIT_ENABLED=false is a kill switch: no patching at all
+    debug=False,           # env GASLIT_DEBUG: print every payload locally before sending
     flush_interval=5.0,    # seconds
     max_batch=200,         # events per request
     max_queue=10_000,      # bounded in-memory queue
@@ -241,9 +241,9 @@ yourpkg.init(
     origin_region=None,    # else auto-detected from env (FLY_REGION, AWS_REGION, ...)
     instrument=None,       # default: every supported library that is installed
 )
-yourpkg.flush(timeout=2.0)     # for scripts and serverless handlers
-yourpkg.shutdown(timeout=2.0)  # flush + stop; also registered with atexit
-yourpkg.track(...)             # manual instrumentation (see below)
+gaslit.flush(timeout=2.0)     # for scripts and serverless handlers
+gaslit.shutdown(timeout=2.0)  # flush + stop; also registered with atexit
+gaslit.track(...)             # manual instrumentation (see below)
 ```
 
 **Behaviour of `init()`**
@@ -255,7 +255,7 @@ yourpkg.track(...)             # manual instrumentation (see below)
 **Manual instrumentation** covers anything not supported automatically, such as raw HTTP calls or in-house model servers:
 
 ```python
-with yourpkg.track(provider="custom", model="my-finetune", label="internal-llm", streaming=True) as t:
+with gaslit.track(provider="custom", model="my-finetune", label="internal-llm", streaming=True) as t:
     for chunk in call_my_model(...):
         t.first_token()            # idempotent, records the first call only
         ...
@@ -372,7 +372,7 @@ Most measurements are **not sent individually**. The SDK folds them into per-min
 ```json
 {
   "schema_version": 1,
-  "sdk": { "name": "yourpkg-python", "version": "0.1.0" },
+  "sdk": { "name": "gaslit-python", "version": "0.1.0" },
   "runtime": { "language": "python", "version": "3.12.4" },
   "sent_at": 1790000000123,
   "dropped_since_last": 0,
@@ -485,7 +485,7 @@ Keep the allowlist in one shared module in the SDK and re-validate it on the ser
 
 - A background daemon thread starts lazily on the first call. It sends queued samples every `flush_interval` seconds (or when `max_batch` are queued) and closed per-minute summaries once a minute (Section 19.3). **No network I/O ever happens on the caller's thread.**
 - The queue is bounded (`max_queue`). On overflow, drop and count the dropped events, and report the count as `dropped_since_last`.
-- HTTP uses the stdlib only (`urllib.request` / `http.client`) with TLS verification on, a ~3 s connect and ~5 s total timeout, a gzip body and `User-Agent: yourpkg-python/<version>`. Respect `HTTPS_PROXY`.
+- HTTP uses the stdlib only (`urllib.request` / `http.client`) with TLS verification on, a ~3 s connect and ~5 s total timeout, a gzip body and `User-Agent: gaslit-python/<version>`. Respect `HTTPS_PROXY`.
 
 **Handling responses from the ingest API**
 
@@ -502,11 +502,11 @@ Keep the allowlist in one shared module in the SDK and re-validate it on the ser
 
 - **Exit:** an `atexit` handler flushes with a 2 s cap.
 - **Forking:** `os.register_at_fork(after_in_child=...)` resets the queue and thread in child processes, which matters under gunicorn or uwsgi with preload.
-- **Serverless** (e.g. AWS Lambda): background threads freeze between invocations. Document calling `yourpkg.flush()` at the end of the handler, and add a decorator helper later.
+- **Serverless** (e.g. AWS Lambda): background threads freeze between invocations. Document calling `gaslit.flush()` at the end of the handler, and add a decorator helper later.
 
 **Hygiene**
 
-- **Logging:** use `logging.getLogger("yourpkg")` with a `NullHandler`. Rate-limit warnings to once per type per 10 minutes, and never print unless `debug=True`.
+- **Logging:** use `logging.getLogger("gaslit")` with a `NullHandler`. Rate-limit warnings to once per type per 10 minutes, and never print unless `debug=True`.
 - **Runtime support:** Python 3.10+, but verify which versions current provider SDKs support.
 - **Zero runtime dependencies**, which minimises version conflicts and supply-chain risk.
 
@@ -666,9 +666,9 @@ These run **inside the user's infrastructure with their own provider key**, as a
 
 ### 9.2 Ingest API
 
-`POST https://ingest.<domain>/v1/ingest`
+`POST https://ingest.gaslit.dev/v1/ingest`
 
-**Headers:** `Authorization: Bearer rm_live_...`, `Content-Type: application/json`, optional `Content-Encoding: gzip`, `User-Agent`.
+**Headers:** `Authorization: Bearer gl_live_...`, `Content-Type: application/json`, optional `Content-Encoding: gzip`, `User-Agent`.
 
 **Limits:** ≤ 1 MB compressed, ≤ 5 MB decompressed (stream-decompress with a hard cap to guard against zip bombs), ≤ 1,000 records (summaries plus samples) per batch.
 
@@ -841,7 +841,7 @@ This describes the default, Fly.io. AWS is the alternative in Section 16.
 
 - **Region:** EU, Frankfurt or Amsterdam (decision D12). London is outside the EU. EU data residency is also a selling point for European developers.
 - **Database:** managed Postgres with automated backups and point-in-time recovery. Test a restore before launch.
-- **Hostnames:** `app.<domain>` and `ingest.<domain>` are separate, both behind Cloudflare.
+- **Hostnames:** `app.gaslit.dev` and `ingest.gaslit.dev` are separate, both behind Cloudflare.
 - **Secrets:** kept in the platform secret store (Fly secrets or AWS Secrets Manager), never in the repo or in images.
 
 **Build and provisioning**
@@ -1022,7 +1022,7 @@ Both must be protected. The checklist in 11.11 must be fully ticked before publi
 
 **CORS**
 
-- The dashboard API allows only `https://app.<domain>`, never a wildcard with credentials.
+- The dashboard API allows only `https://app.gaslit.dev`, never a wildcard with credentials.
 - **The ingest API has no CORS at all.** It is server-to-server only, which also discourages putting keys in browser code.
 
 **Other controls**
@@ -1067,7 +1067,7 @@ Both must be protected. The checklist in 11.11 must be fully ticked before publi
 
 **Format**
 
-- `rm_live_` followed by 32 random bytes (`secrets.token_bytes`) encoded as base62, then a 6-character checksum (e.g. CRC32 in base62).
+- `gl_live_` followed by 32 random bytes (`secrets.token_bytes`) encoded as base62, then a 6-character checksum (e.g. CRC32 in base62).
 - **Why this shape:** the prefix makes leaked keys recognisable to secret scanners (and later to GitHub's secret scanning partner programme), and the checksum lets the API reject garbage without a database lookup.
 
 **Storage**
@@ -1088,7 +1088,7 @@ Both must be protected. The checklist in 11.11 must be fully ticked before publi
 - Never put them in browser or mobile code, and never commit them.
 - If a key leaks, revoke it and create a new one.
 
-**Later:** `rm_test_` keys for a sandbox project.
+**Later:** `gl_test_` keys for a sandbox project.
 
 ### 11.5 Ingest API hardening
 
@@ -1146,7 +1146,7 @@ Both must be protected. The checklist in 11.11 must be fully ticked before publi
 
 - The only network activity is HTTPS POSTs to the configured endpoint.
 - TLS verification cannot be turned off, except through an explicit, documented flag for `localhost` development.
-- The SDK reads only its own `YOURPKG_*` variables and the documented region variables.
+- The SDK reads only its own `GASLIT_*` variables and the documented region variables.
 
 **Release process**
 
@@ -1272,9 +1272,9 @@ All items must be ticked before public launch.
 
 ### 12.1 Positioning statement
 
-> For developers shipping features on top of AI model APIs, <Product> is reliability monitoring measured from **your own real traffic**. It tells you within seconds whether a slowdown or error is yours or the provider's, without your prompts or outputs ever leaving your app.
+> For developers shipping features on top of AI model APIs, Gaslit is reliability monitoring measured from **your own real traffic**. It tells you within seconds whether a slowdown or error is yours or the provider's, without your prompts or outputs ever leaving your app.
 >
-> Unlike LLM tracing tools that capture content to debug prompts, or status sites that ping endpoints, <Product> measures real workload performance and compares it, anonymously, with everyone else using the same model.
+> Unlike LLM tracing tools that capture content to debug prompts, or status sites that ping endpoints, Gaslit measures real workload performance and compares it, anonymously, with everyone else using the same model.
 
 ### 12.2 Taglines
 
@@ -1420,7 +1420,7 @@ Build in this order. Each milestone must meet its "done when" criteria before mo
 ├── PROJECT_BRIEF.md            # this file (source of truth)
 ├── CLAUDE.md                   # short agent guide (Appendix C)
 ├── README.md  SECURITY.md  PRIVACY.md  LICENSE
-├── sdk/python/                 # yourpkg: src/yourpkg/, tests/, noxfile.py, pyproject.toml
+├── sdk/python/                 # gaslit: src/gaslit/, tests/, noxfile.py, pyproject.toml
 ├── server/                     # FastAPI: app/ingest, app/api, app/auth, app/core, migrations/, tests/
 ├── worker/                     # rollups, retention, status poller (may share code with server/)
 ├── web/                        # React + TypeScript + Vite
@@ -1451,7 +1451,7 @@ Ask Saad about each of these. Use the default only if he says so.
 
 | # | Decision | Options | Default | **Outcome** |
 |---|---|---|---|---|
-| D1 | Product, domain and package name | n/a | Check PyPI, npm, the domain, a GitHub org and trademark conflicts before choosing | Placeholders for now |
+| D1 | Product, domain and package name | n/a | Check PyPI, npm, the domain, a GitHub org and trademark conflicts before choosing | **Gaslit** (`gaslit.dev`), 2026-10-05 |
 | D2 | Hosting | **Fly.io:** familiar, fastest to ship. **AWS:** ECS Fargate or App Runner, or Lambda + API Gateway for ingest, plus RDS. Fills the AWS CV gap but takes more setup | Fly.io for the MVP, with Terraform for Cloudflare and the database. Revisit AWS for ingest as a later learning extension. **If AWS experience matters more than speed, choose AWS now** | Fly.io |
 | D3 | Database layout | Plain Postgres partitioning plus our own rollups, or TimescaleDB | Plain Postgres: portable and teaches more. Keep the repository layer | Plain Postgres |
 | D4 | Frontend | React + Vite SPA, or Next.js | React + Vite SPA, with FastAPI handling auth | Vite + Preact + TS + uPlot SPA |
@@ -1906,7 +1906,7 @@ Track monthly:
 ## Appendix C: Suggested `CLAUDE.md` (keep it short; it loads every session)
 
 ```markdown
-# <Product>: agent guide
+# Gaslit: agent guide
 
 Read PROJECT_BRIEF.md before any non-trivial work. It is the source of truth.
 

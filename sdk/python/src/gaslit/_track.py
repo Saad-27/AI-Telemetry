@@ -1,4 +1,4 @@
-"""Manual instrumentation: ``yourpkg.track()`` (brief §6.1, ADR 0003).
+"""Manual instrumentation: ``gaslit.track()`` (brief §6.1, ADR 0003).
 
 Every method catches its own failures (P4). ``__exit__`` never suppresses the user's
 exception, so it propagates unchanged.
@@ -45,7 +45,7 @@ def _exception_class(exc: BaseException) -> str:
 
 
 class Tracker:
-    """Returned by ``yourpkg.track()``. A no-op when the SDK is off."""
+    """Returned by ``gaslit.track()``. A no-op when the SDK is off."""
 
     __slots__ = ("_call",)
 

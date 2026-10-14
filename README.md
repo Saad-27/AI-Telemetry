@@ -1,4 +1,4 @@
-# <Product>
+# Gaslit
 
 Open-source SDK plus a hosted dashboard that answers "is it me, or the model provider?"
 using metadata from your app's own AI model calls. No prompts, outputs or keys are ever
@@ -10,7 +10,7 @@ collected. See [PROJECT_BRIEF.md](PROJECT_BRIEF.md) for the full design.
 
 | Path | What |
 |---|---|
-| `sdk/python/` | `yourpkg` Python SDK (Apache-2.0, zero runtime dependencies, Python 3.10+) |
+| `sdk/python/` | `gaslit` Python SDK (Apache-2.0, zero runtime dependencies, Python 3.10+) |
 | `server/` | FastAPI service (Python 3.12). Currently `/healthz` and `/readyz` only |
 | `docs/decisions/` | Architecture decision records |
 | `deploy/fly/` | Fly.io app config per environment |

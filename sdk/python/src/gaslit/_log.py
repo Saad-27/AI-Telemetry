@@ -6,7 +6,7 @@ import logging
 import sys
 import time
 
-logger = logging.getLogger("yourpkg")
+logger = logging.getLogger("gaslit")
 logger.addHandler(logging.NullHandler())
 
 WARN_INTERVAL_S = 600.0
@@ -24,7 +24,7 @@ def warn(kind: str, message: str) -> None:
     _last_warned[kind] = now
     logger.warning(message)
     if debug:
-        print(f"[yourpkg] {message}", file=sys.stderr)
+        print(f"[gaslit] {message}", file=sys.stderr)
 
 
 def reset() -> None:

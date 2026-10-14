@@ -3,7 +3,7 @@ requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"
 
 [project]
-name = "yourpkg"
+name = "gaslit"
 version = "0.0.0"
 description = "Passive reliability metrics for the AI model calls your app already makes. Metadata only."
 readme = "README.md"
@@ -22,7 +22,7 @@ classifiers = [
 dev = ["pytest", "mypy", "ruff"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/yourpkg"]
+packages = ["src/gaslit"]
 
 [tool.ruff]
 extend = "../../ruff.toml"

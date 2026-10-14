@@ -1,4 +1,4 @@
-"""Configuration from ``init()`` arguments and ``YOURPKG_*`` variables (brief §6.1, §11.7).
+"""Configuration from ``init()`` arguments and ``GASLIT_*`` variables (brief §6.1, §11.7).
 
 Invalid values never raise: each one is replaced by a safe default and warned about once.
 Warnings never echo the value, since a bad key or endpoint may hold a secret.
@@ -16,9 +16,9 @@ from . import _log
 from ._model import Tags, valid_tag
 
 # Placeholder until the product name is chosen (D1). The .invalid TLD never resolves.
-DEFAULT_ENDPOINT = "https://ingest.yourpkg.invalid"
+DEFAULT_ENDPOINT = "https://ingest.gaslit.invalid"
 INGEST_PATH = "/v1/ingest"
-KEY_PREFIX = "rm_"
+KEY_PREFIX = "gl_"
 REGION_ENV_VARS = ("FLY_REGION", "AWS_REGION", "VERCEL_REGION")
 
 _LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
@@ -44,8 +44,8 @@ class Config:
 
 
 def is_enabled(enabled: object, environ: Mapping[str, str]) -> bool:
-    """``YOURPKG_ENABLED=false`` is a kill switch and wins over the argument."""
-    if environ.get("YOURPKG_ENABLED", "").strip().lower() in _FALSE:
+    """``GASLIT_ENABLED=false`` is a kill switch and wins over the argument."""
+    if environ.get("GASLIT_ENABLED", "").strip().lower() in _FALSE:
         return False
     return enabled is not False
 
@@ -66,9 +66,9 @@ def load_config(
     environ: Mapping[str, str] = os.environ,
 ) -> Config:
     return Config(
-        api_key=_api_key(api_key if api_key is not None else environ.get("YOURPKG_KEY")),
-        ingest_url=_endpoint(endpoint if endpoint is not None else environ.get("YOURPKG_ENDPOINT")),
-        debug=debug is True or environ.get("YOURPKG_DEBUG", "").strip().lower() in _TRUE,
+        api_key=_api_key(api_key if api_key is not None else environ.get("GASLIT_KEY")),
+        ingest_url=_endpoint(endpoint if endpoint is not None else environ.get("GASLIT_ENDPOINT")),
+        debug=debug is True or environ.get("GASLIT_DEBUG", "").strip().lower() in _TRUE,
         flush_interval=_number("flush_interval", flush_interval, 5.0, 0.1, 300.0),
         max_batch=int(_number("max_batch", max_batch, 200, 1, 1000, integer=True)),
         max_queue=int(_number("max_queue", max_queue, 10_000, 1, 1_000_000, integer=True)),
@@ -87,10 +87,10 @@ def load_config(
 def _api_key(key: object) -> str | None:
     key = key.strip() if isinstance(key, str) else None
     if not key:
-        _log.warn("no_key", "No ingest key: set YOURPKG_KEY or pass api_key. Nothing will be sent.")
+        _log.warn("no_key", "No ingest key: set GASLIT_KEY or pass api_key. Nothing will be sent.")
         return None
     if not key.startswith(KEY_PREFIX) or not (key.isascii() and key.replace("_", "").isalnum()):
-        # Also stops a provider key pasted into YOURPKG_KEY from ever reaching our ingest.
+        # Also stops a provider key pasted into GASLIT_KEY from ever reaching our ingest.
         _log.warn(
             "bad_key",
             f"The ingest key is malformed (expected {KEY_PREFIX}...). Nothing will be sent.",

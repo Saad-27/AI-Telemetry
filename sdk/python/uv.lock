@@ -449,7 +449,7 @@ wheels = [
 ]
 
 [[package]]
-name = "yourpkg"
+name = "gaslit"
 version = "0.0.0"
 source = { editable = "." }
 

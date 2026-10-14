@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from yourpkg._model import (
+from gaslit._model import (
     DECODE_BOUNDS_TPS,
     DECODE_BUCKETS,
     LATENCY_BOUNDS_MS,
