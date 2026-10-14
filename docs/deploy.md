@@ -32,10 +32,9 @@ Deployment grows with the code, so each piece arrives when the milestone that ne
 
 | When | What gets built (code) | What you do (platforms) | Why then |
 |---|---|---|---|
-| **Now** | Fly config, deploy and infra workflows, Terraform for Cloudflare, ADRs 0005 and 0006, this runbook | Setup steps 0-6 below: MFA, domain, Fly app and database, Cloudflare, GitHub settings, first Terraform run, certificates | Proves the path to a live URL while there is almost nothing to deploy, so deploy problems never get mixed up with code problems |
-| **Right after** | Rename the placeholders (`yourpkg` → `gaslit`, `YOURPKG_KEY` → `GASLIT_KEY`, `rm_live_` → `gl_live_`, `<domain>` → `gaslit.dev`) | Nothing | Must happen before the first SDK release, because env var names and key prefixes are hard to change once installed in users' apps |
-| **M2** | Nothing new for deployment. Production redeploys on every approved merge | Nothing | SDK work runs in users' apps, not on our servers |
-| **M3** | Alembic `release_command` turned on in `production.toml`. Separate Fly apps for `ingest` and `worker` (the worker has no public port), with `ingest` pointed at the ingest app in `terraform.tfvars`. Load test, with results in `docs/capacity.md` | Create the new Fly apps, attach the database and add their deploy tokens | First real database schema and first real traffic. Splitting ingest lets it scale separately from the dashboard (brief §20) |
+| **Done** | Fly config, deploy and infra workflows, Terraform for Cloudflare, ADRs 0005-0007, this runbook, placeholder rename | Steps 0, 1 and 8 below: MFA, domain, PyPI name | Free or near-free, and the names could be taken |
+| **M2** | Nothing new for deployment | Nothing | SDK work runs in users' apps, not on our servers |
+| **M3** | Alembic `release_command` turned on in `production.toml`. Separate Fly apps for `ingest` and `worker` (the worker has no public port) only when load needs it (brief §20), with `ingest` pointed at the ingest app in `terraform.tfvars`. Load test, with results in `docs/capacity.md` | Steps 2-6: Neon database, Fly app, Cloudflare tokens, GitHub settings, first Terraform run, certificates | First real database schema and first thing worth hosting. Nothing is paid for before this (ADR 0007) |
 | **M4** | Web SPA build in the deploy, OAuth and session-key settings, security headers | Step 7 (OAuth apps), then `fly secrets set` for the client IDs, secrets and session key | Login and the dashboard need them. Production becomes a clickable website |
 | **M5** | Status poller inside the worker | Nothing | Outbound requests only, so no infrastructure change |
 | **M7** | `release.yml` for PyPI Trusted Publishing, base images pinned by digest, uptime check, Grafana | A tested backup restore, step 8. Decide whether alpha needs a staging app (ADR 0006) | Launch: the security checklist in brief §11.11 must be fully ticked |
@@ -47,7 +46,7 @@ Deployment grows with the code, so each piece arrives when the milestone that ne
 | Now | SDK unit tests | `make test` |
 | End of M1 | Exactly what the SDK sends | `gaslit.init(debug=True)` prints every payload locally, no account needed |
 | End of M2 | Real OpenAI and Anthropic calls | Your own scripts with debug output, or the fake provider (no token cost) |
-| End of M3 | Full pipeline: app → ingest → database → rollups | Locally with `make dev`; hosted once steps 0-6 are done |
+| End of M3 | Full pipeline: app → ingest → database → rollups | Locally with `make dev`; hosted once steps 2-6 are done |
 | End of M4 | The real website: sign up, create a key, see calls on the dashboard | `https://app.gaslit.dev` |
 | M7 | Real users (private alpha) | `https://app.gaslit.dev` |
 
@@ -66,20 +65,24 @@ Turn it on for GitHub, Fly.io, Cloudflare, PyPI and your email before creating a
    registrar lock is on.
 3. Copy the **Zone ID** from the domain's Overview page. It goes into GitHub (step 4).
 
-### 2. Fly.io
-Install `flyctl` and run `fly auth login`, then:
+### 2. Database (Neon) and Fly.io
+**Database** ([ADR 0007](decisions/0007-neon-and-scale-to-zero.md)): create a Neon account and a
+project named `gaslit` on the Free plan, region **AWS Europe Central 1 (Frankfurt)**, Postgres 17.
+Copy the **direct** connection string (not the pooled one; the app keeps its own small pool).
+
+Remove `&channel_binding=require` from it and keep `sslmode=require`. asyncpg passes query
+parameters it does not know to Postgres as settings, and Postgres rejects `channel_binding`.
+
+**Fly:** install `flyctl` and run `fly auth login`, then:
 
 ```bash
 # App names are global on Fly. If one is taken, choose another and update
 # deploy/fly/production.toml and infra/terraform/terraform.tfvars to match.
 fly apps create gaslit-api-production
 
-# Managed Postgres in Frankfurt, same major version as local dev. Running it without
-# --plan lists the plans and prices; pick the smallest. It needs automated backups (brief §9.8).
-fly mpg create --name gaslit-production --region fra --pg-major-version 17
-
-# Stores the connection string as the app secret DATABASE_URL. Nothing goes in the repo.
-fly mpg attach <CLUSTER_ID> -a gaslit-api-production
+# Stores the Neon connection string as the app secret DATABASE_URL. Nothing goes in the repo.
+# Run it with no value on the command line, so the URL stays out of your shell history:
+read -rsp "Neon URL: " DATABASE_URL && fly secrets set DATABASE_URL="$DATABASE_URL" -a gaslit-api-production --stage; unset DATABASE_URL
 
 # Deploy token scoped to this one app, valid for a year. Put a rotation reminder in your calendar.
 fly tokens create deploy -a gaslit-api-production -x 8760h
@@ -88,9 +91,12 @@ fly tokens create deploy -a gaslit-api-production -x 8760h
 The token is a GitHub secret (step 4). Optional first manual deploy, from the repo root:
 
 ```bash
-fly deploy server --config "$PWD/deploy/fly/production.toml"
+fly deploy server --config "$PWD/deploy/fly/production.toml" --ha=false
 curl https://gaslit-api-production.fly.dev/readyz   # {"status":"ok"}
 ```
+
+The first request after a quiet spell is slow: the Fly machine and the Neon compute both start
+from sleep. The deploy smoke test retries for about 30 s to cover this.
 
 ### 3. Cloudflare (Terraform access)
 1. **State bucket:** R2 > Create bucket `gaslit-tfstate`, with location hint Western Europe.
@@ -182,18 +188,19 @@ The callback path is `/auth/{provider}/callback` (brief §9.3). The secret names
   secrets via `fly secrets set ... -a gaslit-api-production`.
 
 ### 8. PyPI and npm names
-A PyPI "pending publisher" sets up Trusted Publishing, but it does **not** reserve the name.
-1. Create a PyPI account with MFA.
-2. Add a pending publisher with these values: project `gaslit`, owner `Saad-27`, repo
-   `AI-Telemetry`, workflow `release.yml`, environment `pypi`.
-3. Publish a placeholder release early (brief §11.7). Do the same on npm when the TypeScript
-   SDK starts.
+**Done 2026-10-14:** a placeholder `gaslit` 0.0.0 holds the name on PyPI. It was uploaded once
+with a temporary account-wide token, which was then deleted.
+
+In M7, when `release.yml` exists: on PyPI, go to the project's **Manage > Publishing** and add a
+trusted publisher (owner `Saad-27`, repo `AI-Telemetry`, workflow `release.yml`, environment
+`pypi`). Releases then need no token. The first real version is `0.1.0`. Do the same on npm when
+the TypeScript SDK starts.
 
 ## Inventory: everything that lives outside the repo
 
 | Where | Name | What |
 |---|---|---|
-| Fly app secret | `DATABASE_URL` | Set by `fly mpg attach` |
+| Fly app secret | `DATABASE_URL` | Neon direct connection string, without `channel_binding` (step 2) |
 | Fly app secret | OAuth client IDs and secrets, session key | M4 |
 | GitHub `production` env | `FLY_API_TOKEN`, var `PUBLIC_URL` | Deploy token, smoke-test URL |
 | GitHub repo secrets | `CLOUDFLARE_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Terraform |
@@ -208,7 +215,8 @@ A PyPI "pending publisher" sets up Trusted Publishing, but it does **not** reser
   `fly deploy --config "$PWD/deploy/fly/production.toml" --image <that image>` from the repo root. Afterwards, revert the commit on
   `main` so the next deploy does not bring the bug back.
 - **Logs:** `fly logs -a gaslit-api-production`.
-- **Connect to the database:** `fly mpg connect`, or `fly mpg proxy` for a local client. The
-  database is never public.
+- **Connect to the database:** the SQL editor in Neon's dashboard, or `psql` with the
+  connection string. Unlike Fly's private network, Neon is reachable from the internet, protected
+  by its password and TLS. Check Neon's IP allow-list options before M7 (ADR 0007).
 - **Rotate the deploy token:** create a new one (step 2), update the GitHub secret, then revoke
   the old one with `fly tokens list` and `fly tokens revoke <id>`.

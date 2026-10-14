@@ -18,11 +18,12 @@ primary_region = "fra" # D12: EU-hosted
 [http_service]
   internal_port = 8000
   force_https = true
-  # Always keep one machine warm so the first dashboard visit or SDK batch is not slowed by a
-  # cold start. `fly deploy` creates a second machine by default for availability.
+  # Scale to zero (ADR 0007): no machine runs, and nothing is billed, while there is no
+  # traffic. The first request after a quiet spell waits a few seconds for a cold start. Raise
+  # this to 1 once real users would notice. The deploy passes --ha=false for one machine.
   auto_stop_machines = "stop"
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
   [http_service.concurrency]
     type = "requests"
@@ -40,4 +41,4 @@ primary_region = "fra" # D12: EU-hosted
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  memory = "256mb" # the smallest size; today's server needs far less. Revisit with the M3 load test.
