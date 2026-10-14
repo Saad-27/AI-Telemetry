@@ -1,6 +1,6 @@
 # 0005: Staging from day one, deployed by CI
 
-- **Status:** accepted
+- **Status:** accepted; staging part superseded by [0006](0006-production-only.md)
 - **Date:** 2026-10-05
 
 ## Context
