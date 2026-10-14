@@ -34,7 +34,7 @@ def records(env: dict[str, object]) -> int:
 
 
 def test_flush_sends_summary_and_sample(ingest: FakeIngest) -> None:
-    start(ingest, service="svc")
+    start(ingest, service="svc", sample_rate=0.0)  # only the first_of_series sample
     calls(3)
     yourpkg.flush()
     [req] = ingest.wait_for(1)
