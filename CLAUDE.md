@@ -1,4 +1,4 @@
-# <Product>: agent guide
+# Gaslit: agent guide
 
 Read PROJECT_BRIEF.md before any non-trivial work. It is the source of truth.
 

@@ -16,7 +16,7 @@ from collections.abc import Callable
 
 from fake_ingest import FakeIngest
 
-import yourpkg
+import gaslit
 
 CALL_BUDGET_US = 50.0  # median per call
 CHUNK_BUDGET_US = 2.0  # median per streamed chunk
@@ -25,7 +25,7 @@ PER_ROUND = 200
 
 
 def tracked_call() -> None:
-    with yourpkg.track(provider="custom", model="bench", streaming=True) as t:
+    with gaslit.track(provider="custom", model="bench", streaming=True) as t:
         t.first_token()
         t.set_usage(input_tokens=1200, output_tokens=300)
 
@@ -44,17 +44,17 @@ def median_us(fn: Callable[[], None], per_round: int = PER_ROUND) -> tuple[float
 
 def main() -> int:
     with FakeIngest() as ingest:
-        yourpkg.init(api_key="rm_live_bench", endpoint=ingest.url)
+        gaslit.init(api_key="gl_live_bench", endpoint=ingest.url)
         for _ in range(1000):  # warm up, and start the sender thread
             tracked_call()
 
         call_med, call_p99 = median_us(tracked_call)
 
-        with yourpkg.track(provider="custom", model="bench", streaming=True) as t:
+        with gaslit.track(provider="custom", model="bench", streaming=True) as t:
             t.first_token()
             chunk_med, chunk_p99 = median_us(t.first_token, per_round=10_000)
 
-        yourpkg.shutdown()
+        gaslit.shutdown()
         if not ingest.accepted():
             print("FAIL: nothing reached the fake ingest")
             return 1

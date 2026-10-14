@@ -30,9 +30,9 @@ RETRY_AFTER_DEFAULT_S = 30.0  # 429 without a usable Retry-After
 RETRY_AFTER_MAX_S = 300.0
 MIN_WAIT_S = 0.05
 
-SDK = {"name": "yourpkg-python", "version": __version__}
+SDK = {"name": "gaslit-python", "version": __version__}
 RUNTIME = {"language": "python", "version": "{}.{}.{}".format(*sys.version_info[:3])}
-USER_AGENT = f"yourpkg-python/{__version__}"
+USER_AGENT = f"gaslit-python/{__version__}"
 
 Record = dict[str, object]
 
@@ -103,7 +103,7 @@ class Sender:
             return
         with self._cond:
             if self._thread is None:
-                thread = threading.Thread(target=self._run, name="yourpkg-sender", daemon=True)
+                thread = threading.Thread(target=self._run, name="gaslit-sender", daemon=True)
                 thread.start()
                 self._thread = thread
 
@@ -221,7 +221,7 @@ class Sender:
             allow_nan=False,
         )
         if self._config.debug:
-            print(f"[yourpkg] payload {body}", file=sys.stderr)  # exactly what is sent (P5)
+            print(f"[gaslit] payload {body}", file=sys.stderr)  # exactly what is sent (P5)
         if not self._config.can_send:  # debug without a key: print only
             self._accepted()
             return True

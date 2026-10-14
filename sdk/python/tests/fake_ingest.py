@@ -6,7 +6,7 @@ schema (P1), so an SDK bug that adds a field fails here first. Responses can be 
 Local use::
 
     uv run python tests/fake_ingest.py 8765
-    YOURPKG_ENDPOINT=http://127.0.0.1:8765 YOURPKG_KEY=rm_live_dev python my_app.py
+    GASLIT_ENDPOINT=http://127.0.0.1:8765 GASLIT_KEY=gl_live_dev python my_app.py
 """
 
 from __future__ import annotations
@@ -150,7 +150,7 @@ class FakeIngest:
                 raw = self.rfile.read(length)
                 if self.path != "/v1/ingest":
                     return 404, b"", None
-                if not self.headers.get("Authorization", "").startswith("Bearer rm_"):
+                if not self.headers.get("Authorization", "").startswith("Bearer gl_"):
                     return 401, b"", None
                 if length > MAX_BODY:
                     return 413, b"", None

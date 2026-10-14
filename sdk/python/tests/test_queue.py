@@ -1,4 +1,4 @@
-from yourpkg._queue import BoundedQueue
+from gaslit._queue import BoundedQueue
 
 
 def test_drops_newest_when_full_and_counts() -> None:

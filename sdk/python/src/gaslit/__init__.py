@@ -1,4 +1,4 @@
-"""yourpkg: passive reliability metrics for AI model calls.
+"""gaslit: passive reliability metrics for AI model calls.
 
 Importing this package must have no side effects: no patching, no threads,
 no network and no environment reads. All of that happens in ``init()`` (brief §11.7).
@@ -29,7 +29,7 @@ def init(
     max_samples_per_minute: int = 10,
     origin_region: str | None = None,
 ) -> None:
-    """Start measuring. Reads ``YOURPKG_KEY`` and other ``YOURPKG_*`` variables.
+    """Start measuring. Reads ``GASLIT_KEY`` and other ``GASLIT_*`` variables.
 
     Idempotent and never raises. Without a key it warns once and does nothing,
     unless ``debug=True``, which prints payloads locally instead of sending them.
@@ -91,7 +91,7 @@ def track(
 
     ::
 
-        with yourpkg.track(provider="custom", model="my-finetune", streaming=True) as t:
+        with gaslit.track(provider="custom", model="my-finetune", streaming=True) as t:
             for chunk in call_my_model(...):
                 t.first_token()
             t.set_usage(input_tokens=1234, output_tokens=210)

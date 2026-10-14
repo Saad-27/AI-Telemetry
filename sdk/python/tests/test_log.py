@@ -2,13 +2,13 @@ import logging
 
 import pytest
 
-from yourpkg import _log
+from gaslit import _log
 
 
 def test_warnings_rate_limited_per_kind(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="yourpkg")
+    caplog.set_level(logging.WARNING, logger="gaslit")
     now = [1000.0]
     monkeypatch.setattr("time.monotonic", lambda: now[0])
     _log.warn("a", "first")
@@ -24,4 +24,4 @@ def test_silent_on_stderr_unless_debug(capsys: pytest.CaptureFixture[str]) -> No
     assert capsys.readouterr().err == ""
     _log.debug = True
     _log.warn("loud", "printed")
-    assert capsys.readouterr().err == "[yourpkg] printed\n"
+    assert capsys.readouterr().err == "[gaslit] printed\n"

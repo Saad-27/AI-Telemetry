@@ -37,7 +37,7 @@ def init(enabled: object, **options: Any) -> None:
     global _initialised, state
     with _lock:
         if _initialised:
-            _log.warn("init_twice", "yourpkg.init() was already called; ignoring this call.")
+            _log.warn("init_twice", "gaslit.init() was already called; ignoring this call.")
             return
         _initialised = True
         if not is_enabled(enabled, os.environ):

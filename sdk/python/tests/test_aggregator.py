@@ -1,8 +1,8 @@
 import random
 import threading
 
-from yourpkg._aggregator import OTHER_MODEL, Aggregator
-from yourpkg._model import Call, Tags
+from gaslit._aggregator import OTHER_MODEL, Aggregator
+from gaslit._model import Call, Tags
 
 MINUTE = 1_790_000_040_000
 

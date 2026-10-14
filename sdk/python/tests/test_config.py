@@ -3,8 +3,8 @@ import logging
 import pytest
 from conftest import KEY
 
-from yourpkg._config import DEFAULT_ENDPOINT, Config, is_enabled, load_config
-from yourpkg._model import Tags
+from gaslit._config import DEFAULT_ENDPOINT, Config, is_enabled, load_config
+from gaslit._model import Tags
 
 
 def test_defaults() -> None:
@@ -18,13 +18,13 @@ def test_defaults() -> None:
 
 
 def test_key_from_env_and_argument_wins() -> None:
-    assert load_config(environ={"YOURPKG_KEY": KEY}).api_key == KEY
-    assert load_config(api_key="rm_live_other", environ={"YOURPKG_KEY": KEY}).api_key == (
-        "rm_live_other"
+    assert load_config(environ={"GASLIT_KEY": KEY}).api_key == KEY
+    assert load_config(api_key="gl_live_other", environ={"GASLIT_KEY": KEY}).api_key == (
+        "gl_live_other"
     )
 
 
-@pytest.mark.parametrize("key", [None, "", "   ", "sk-SENTINEL-KEY", "rm_live_a\r\nX: y", 123])
+@pytest.mark.parametrize("key", [None, "", "   ", "sk-SENTINEL-KEY", "gl_live_a\r\nX: y", 123])
 def test_missing_or_malformed_key_disables_sending(key: object) -> None:
     c = load_config(api_key=key, environ={})
     assert c.api_key is None
@@ -57,7 +57,7 @@ def test_endpoint_rules(endpoint: object, url: str | None) -> None:
 
 
 def test_endpoint_from_env() -> None:
-    c = load_config(api_key=KEY, environ={"YOURPKG_ENDPOINT": "http://localhost:9"})
+    c = load_config(api_key=KEY, environ={"GASLIT_ENDPOINT": "http://localhost:9"})
     assert c.ingest_url == "http://localhost:9/v1/ingest"
 
 
@@ -74,14 +74,14 @@ def test_endpoint_from_env() -> None:
     ],
 )
 def test_kill_switch(arg: bool, env: str | None, enabled: bool) -> None:
-    environ = {} if env is None else {"YOURPKG_ENABLED": env}
+    environ = {} if env is None else {"GASLIT_ENABLED": env}
     assert is_enabled(arg, environ) is enabled
 
 
 def test_debug_from_argument_or_env() -> None:
     assert load_config(debug=True, environ={}).debug
-    assert load_config(environ={"YOURPKG_DEBUG": "1"}).debug
-    assert not load_config(environ={"YOURPKG_DEBUG": "no"}).debug
+    assert load_config(environ={"GASLIT_DEBUG": "1"}).debug
+    assert not load_config(environ={"GASLIT_DEBUG": "no"}).debug
 
 
 def test_tags_validated() -> None:
@@ -116,7 +116,7 @@ def test_bad_numbers_fall_back_to_defaults(name: str, value: object) -> None:
 
 
 def test_warnings_never_echo_secrets(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.WARNING, logger="yourpkg")
+    caplog.set_level(logging.WARNING, logger="gaslit")
     load_config(
         api_key="sk-SENTINEL-KEY",
         endpoint="https://sentinelcorp.example.com/?key=SENTINEL_QS",
