@@ -12,7 +12,7 @@ depend on them, so they are recorded here at M0. The brief's §16 table now link
 | # | Decision | Outcome |
 |---|---|---|
 | D1 | Name | **Gaslit** (`gaslit.dev`), decided 2026-10-05 in [ADR 0005](0005-deployment.md). Code placeholders renamed (`gaslit`, `GASLIT_KEY`, `gl_live_`) |
-| D2 | Hosting | Fly.io, with Terraform for Cloudflare and the database. AWS stays a later learning extension |
+| D2 | Hosting | Fly.io, with Terraform for Cloudflare. Database on Neon Free, scale-to-zero app, nothing hosted before M3 ([ADR 0007](0007-neon-and-scale-to-zero.md)). AWS stays a later learning extension |
 | D3 | Database | Plain Postgres: native day partitions, our own rollups, queries behind a repository layer |
 | D4 | Frontend | Vite + **Preact** + TypeScript (strict) + **uPlot**, built as a static SPA. FastAPI handles auth. Scaffolded in M4 |
 | D5 | Licences | SDK Apache-2.0. Server private until launch |
