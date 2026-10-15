@@ -43,6 +43,7 @@ running, with a cold start of a few seconds after idle).
 - **Backups and network.** Neon Free's restore window is short and the database is reachable from
   the internet (password and TLS only). Both must be revisited before the private alpha, against
   the brief §11.11 checklist (tested restore, least-exposed database).
-- **Compute-hours.** A worker that queries every minute (rollups, status poller, M3/M5) keeps the
-  compute awake around the clock, which uses more than the free 100 compute-hours a month. Check
-  the real usage in M3 and either batch the worker's work or accept the paid tier then.
+- **Compute-hours.** Once real users send data continuously, ingest alone keeps the compute
+  awake around the clock, which uses more than the free 100 compute-hours a month (about day 16).
+  Move to Neon's paid plan then (~$19/month at 0.25 CU). The every-minute rollup worker is
+  dropped so it does not add load in the meantime ([ADR 0008](0008-shared-db-read-time-aggregation.md)).

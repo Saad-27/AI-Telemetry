@@ -1,6 +1,7 @@
 # Gaslit: agent guide
 
 Read PROJECT_BRIEF.md before any non-trivial work. It is the source of truth.
+Read docs/HANDOFF.md at the start of every session, and update it before the session ends.
 
 ## Scope
 - Build the FREE tier only (brief §7). Paid features (§8) are parked.

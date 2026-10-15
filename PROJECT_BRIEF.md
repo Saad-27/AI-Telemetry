@@ -187,7 +187,7 @@ This section exists so the agent does not drift back to ideas that were already 
 | 1 | **Python SDK** (`gaslit`) | Wraps provider SDK calls and measures them. Folds measurements into per-minute summaries and ships those plus errors and a small sample of calls (Section 19). Zero runtime dependencies. Fails open |
 | 2 | **Ingest API** | Authenticates the write-only key, validates and stores events. Stateless and horizontally scalable |
 | 3 | **Database** | Summary records and sampled calls (short retention), 1-minute rollups, global rollups, accounts and keys, official status data |
-| 4 | **Rollup worker** | Adds up the summary records from all of a project's app processes into per-minute rollups (mergeable histograms). Builds the anonymised global baseline |
+| 4 | **Rollup worker** | Adds up the summary records from all of a project's app processes into per-minute rollups (mergeable histograms). Builds the anonymised global baseline. **Deferred:** at launch the dashboard sums summaries at read time ([ADR 0008](docs/decisions/0008-shared-db-read-time-aggregation.md)) |
 | 5 | **Status poller** | Polls official provider status pages every 60 s and stores incidents and component states |
 | 6 | **Dashboard API** | Session-authenticated, tenant-scoped read API plus project and key management |
 | 7 | **Web app** | Landing page, onboarding, dashboard, live feed, model pages, settings |
@@ -719,7 +719,7 @@ Cookie session auth. **Every route is scoped to projects the user is a member of
 - `GET /api/status/incidents?providers=&range=`
 - `GET /api/global/series?provider=&route=&model=&bucket=&continent=&metric=&range=` (returns only points that meet P6)
 
-**Chart resolution by range:** 1 h → 1-minute points, 24 h → 5-minute points, 7 d → 1-hour points. Charts are always served from rollups, never by scanning raw records.
+**Chart resolution by range:** 1 h → 1-minute points, 24 h → 5-minute points, 7 d → 1-hour points. Charts are always served from rollups, never by scanning raw records. **Until rollups are added, charts sum `summary_records` at read time ([ADR 0008](docs/decisions/0008-shared-db-read-time-aggregation.md)).**
 
 ### 9.4 Storage design
 
@@ -757,7 +757,7 @@ Keep queries behind a small repository layer so the storage engine can be swappe
 - `call_samples`, partitioned by `ts`: the sample fields from Section 6.4 plus the server-derived fields. Feeds the live feed, recent errors and onboarding.
   - **Primary key:** `(project_id, ts, event_id)`
   - **Index:** `(project_id, ts DESC)` for the feed
-- `rollups_1m` (built by summing `summary_records`): keyed by `(minute, project_id, service, environment, provider, route, model_key, input_bucket, origin_region)`. Columns:
+- `rollups_1m` (built by summing `summary_records`; **not created at launch**, [ADR 0008](docs/decisions/0008-shared-db-read-time-aggregation.md)): keyed by `(minute, project_id, service, environment, provider, route, model_key, input_bucket, origin_region)`. Columns:
   - `count`, `ok_count`, `cancelled_count`, and an error count for each class
   - `ttft_hist int[]`, `duration_hist int[]`, `decode_hist int[]`
   - `input_tokens_sum`, `output_tokens_sum`
@@ -785,6 +785,10 @@ Percentiles **cannot be averaged** across minutes or projects. Instead, store co
 Adding arrays together gives exact bucket counts for any time range or group of projects. Percentiles are then interpolated within the bucket, with error bounded by bucket width. Document this trade-off; it is a strong interview topic.
 
 ### 9.5 Rollup worker
+
+> **Deferred (15 October 2026).** No rollup worker or `rollups_1m` at launch: the dashboard sums
+> `summary_records` at read time. This section is the design for when measurements need it. See
+> [ADR 0008](docs/decisions/0008-shared-db-read-time-aggregation.md).
 
 **Schedule:** runs every 60 s and recomputes `rollups_1m` for the minutes in [now − 15 min, now − 1 min] by summing the `summary_records` from all of a project's app processes, upserting the results. Recomputing whole minutes makes it idempotent. The 15-minute window covers the SDK's longest send delay (the 5-minute `Retry-After` cap plus retries).
 
@@ -884,7 +888,7 @@ This is dogfooding, and good interview material.
 - **Prometheus metrics:**
   - ingest requests by status, events accepted and rejected, batch size
   - ingest latency histogram and database insert latency
-  - rollup lag (now minus the last processed minute)
+  - rollup lag (now minus the last processed minute), once rollups exist ([ADR 0008](docs/decisions/0008-shared-db-read-time-aggregation.md)); until then, dashboard query latency
   - status poller success per source
   - quota rejections
 - **Dashboards and logs:** Grafana (Grafana Cloud free tier or self-hosted), structured JSON logs, and an external uptime check on `/healthz`.
@@ -1395,7 +1399,7 @@ Build in this order. Each milestone must meet its "done when" criteria before mo
 | **M0** | Foundations | Monorepo, tooling, docker compose with Postgres, CI skeleton, ADR template, this brief and `CLAUDE.md` in the repo | `make dev` and `make test` work locally, and CI is green |
 | **M1** | SDK core | `init`, config, call measurement model, per-minute summary aggregator (histograms, cardinality guard), sampling, bounded queue, sender, retry and backoff, fail-open guards, debug mode, `track()`, atexit and fork handling, local fake ingest | Sentinel and fail-open tests pass for `track()`, and the overhead benchmark runs in CI |
 | **M2** | SDK integrations | `openai` (chat.completions, responses) and `anthropic` (messages.create, messages.stream), sync and async, streaming and non-streaming. Host and route detection. Fake provider server. Examples | Functional, sentinel and transparency tests pass across the compatibility matrix, and the examples produce correct events |
-| **M3** | Ingest and storage | Ingest API, key hashing and cache, validation and limits, partitions, append-only inserts of summaries and samples, rollup worker merging summaries, retention job, Prometheus metrics, load test with results in `docs/capacity.md` (Section 20.6) | Example app → rows → correct rollups end to end. Malformed, oversized, zip-bomb and invalid-key tests pass. Load-test number recorded |
+| **M3** | Ingest and storage | Ingest API, key hashing and cache, validation and limits, partitions, append-only inserts of summaries and samples, rollup worker merging summaries, retention job, Prometheus metrics, load test with results in `docs/capacity.md` (Section 20.6) | Example app → rows → correct dashboard sums end to end (no rollup worker at launch, [ADR 0008](docs/decisions/0008-shared-db-read-time-aggregation.md)). Malformed, oversized, zip-bomb and invalid-key tests pass. Load-test number recorded |
 | **M4** | Web app core | OAuth, sessions, projects, keys, onboarding with first-event check, overview, live feed, model detail, badges, hints, settings, deletion | A new user goes from signup to first event on the dashboard in under 5 minutes. IDOR suite passes. Headers verified |
 | **M5** | Official status | Poller adapters, component mapping, banner, chart shading, incidents page | At least OpenAI, Anthropic, Google, AWS and Azure sources ingesting, with incidents visible on the right charts |
 | ~~**M6**~~ | ~~Global baseline~~ **Dropped (D6)** | 5-minute and 1-hour global rollups, P6 enforcement, overlay and vs-everyone indicator, sharing toggle | k and dominance tests pass, and the toggle excludes a project from future aggregates |
@@ -1651,7 +1655,7 @@ This section defines the **wire format**, meaning what the SDK sends. It must be
 - Summaries go into `summary_records` and samples into `call_samples`, both with idempotent IDs.
 - **No updates on the hot path.** If 8 processes report the same minute, that is 8 inserts, not 8 updates competing for one row.
 
-**The worker merges.** It recomputes `rollups_1m` by summing summaries per project, series and minute over the last 15 minutes (Section 9.5). Then it builds the coarser grains and the global baseline.
+**The worker merges** (deferred: at launch the dashboard sums at read time, [ADR 0008](docs/decisions/0008-shared-db-read-time-aggregation.md)). It recomputes `rollups_1m` by summing summaries per project, series and minute over the last 15 minutes (Section 9.5). Then it builds the coarser grains and the global baseline.
 
 - Postgres has no built-in element-wise array sum. Options:
   - a small custom aggregate
@@ -1706,7 +1710,7 @@ The `SKIP LOCKED` experience still applies, for coordinating the rollup and rete
 ```
 SDKs ──► Cloudflare ──► ingest ×2 (stateless) ──► Postgres (append-only, partitioned)
                                                       ▲
-                               worker ×1 (rollups, global baseline, retention, status poller)
+                               worker ×1 (retention, status poller; rollups later, ADR 0008)
 Browsers ──► Cloudflare ──► web-api ×1-2 ──► reads rollups and samples
 ```
 
