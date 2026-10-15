@@ -20,6 +20,7 @@ test: db
 lint:
 	@for d in $(PKGS); do echo "== lint $$d"; \
 		(cd $$d && uv run ruff check . && uv run ruff format --check . && uv run mypy) || exit 1; done
+	@echo "== lint tools"; cd $(SDK) && uv run ruff check ../../tools && uv run ruff format --check ../../tools
 
 fmt:
 	@for d in $(PKGS); do (cd $$d && uv run ruff check --fix . && uv run ruff format .) || exit 1; done
