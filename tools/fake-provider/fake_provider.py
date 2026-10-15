@@ -2,6 +2,8 @@
 
 It answers ``/v1/chat/completions``, ``/v1/responses`` and ``/v1/messages``, streaming or not,
 with the real response shapes, so the official client libraries work against it unchanged.
+It also answers the Azure OpenAI, Bedrock (``invoke``, not streaming) and Vertex paths for
+those calls, which carry the same bodies.
 Each reply follows a ``Behavior``: latency, a slow stream, 429, 529, 5xx or a hang long enough
 to time the client out. No tokens are spent.
 
@@ -27,6 +29,7 @@ from collections import deque
 from dataclasses import dataclass, fields
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 HEADER = "x-fake-behavior"
 
@@ -47,6 +50,9 @@ class Behavior:
     # Anthropic streams: after the tokens, an error event with this status's error type (HTTP
     # stays 200), as Anthropic reports a failure mid-stream. 0: the stream ends normally.
     stream_error: int = 0
+    # The model the reply reports. Empty: the requested one. Azure is asked for a deployment
+    # name and reports the model behind it.
+    model: str = ""
 
     def token(self, i: int) -> str:
         return f"{self.word}{i} "
@@ -80,11 +86,28 @@ ERROR_TYPES = {  # status: (Anthropic error type, OpenAI error type, OpenAI erro
     429: ("rate_limit_error", "rate_limit_error", "rate_limit_exceeded"),
     529: ("overloaded_error", "server_error", "overloaded"),
 }
-ROUTES = {
-    "/v1/chat/completions": "chat",
-    "/v1/responses": "responses",
-    "/v1/messages": "messages",
+ROUTES = {  # path suffix: route. Azure OpenAI puts a deployment path in front.
+    "/chat/completions": "chat",
+    "/responses": "responses",
+    "/messages": "messages",
 }
+
+
+def route_of(target: str) -> tuple[str | None, str | None]:
+    """The route for a request target, and the model when the path names it (Bedrock, Vertex).
+
+    The target is a path, or a full URL when the client sends through this server as an HTTP
+    proxy, which is how the examples keep a cloud hostname without leaving the machine.
+    """
+    path = unquote(urlsplit(target).path)
+    if path.endswith("/invoke") and "/model/" in path:  # Bedrock
+        return "messages", path.rsplit("/model/", 1)[1].removesuffix("/invoke")
+    if path.endswith((":rawPredict", ":streamRawPredict")) and "/models/" in path:  # Vertex
+        return "messages", path.rsplit("/models/", 1)[1].rsplit(":", 1)[0]
+    for suffix, route in ROUTES.items():
+        if path.endswith(suffix):
+            return route, None
+    return None, None
 
 
 def error_body(route: str, status: int, detail: str = "") -> dict[str, Any]:
@@ -277,7 +300,7 @@ class FakeProvider:
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:
                 raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-                route = ROUTES.get(self.path.split("?")[0])
+                route, path_model = route_of(self.path)
                 try:
                     body = json.loads(raw)
                     behavior = (
@@ -291,7 +314,7 @@ class FakeProvider:
                     return self._send(400, {"error": {"message": f"bad request: {e}"}})
                 if route is None or not isinstance(body, dict):
                     return self._send(404, {"error": {"message": "unknown route"}})
-                model = str(body.get("model", "fake-model"))
+                model = path_model or str(body.get("model", "fake-model"))
                 stream = body.get("stream") is True
                 options = body.get("stream_options")
                 usage = isinstance(options, dict) and options.get("include_usage") is True
@@ -309,13 +332,15 @@ class FakeProvider:
                             behavior.status, error_body(route, behavior.status, detail), headers
                         )
                     elif stream:
-                        self._stream(route, model, behavior, usage)
+                        self._stream(route, behavior.model or model, behavior, usage)
                     else:
-                        self._send(200, message_body(route, model, behavior))
+                        self._send(200, message_body(route, behavior.model or model, behavior))
                 except (BrokenPipeError, ConnectionResetError):
                     pass  # the client gave up; a cancelled stream
                 with fake._cond:
-                    fake.calls.append(Call(self.path, model, stream, behavior.status))
+                    fake.calls.append(
+                        Call(urlsplit(self.path).path, model, stream, behavior.status)
+                    )
                     fake._cond.notify_all()
 
             def _send(

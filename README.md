@@ -14,6 +14,7 @@ collected. See [PROJECT_BRIEF.md](PROJECT_BRIEF.md) for the full design.
 | `sdk/python/` | `gaslit` Python SDK (Apache-2.0, zero runtime dependencies, Python 3.10+) |
 | `server/` | FastAPI service (Python 3.12). Currently `/healthz` and `/readyz` only |
 | `tools/fake-provider/` | Fake OpenAI and Anthropic API for tests and demos (no tokens spent) |
+| `examples/` | Sample apps that print what the SDK sends, offline |
 | `docs/decisions/` | Architecture decision records |
 | `deploy/fly/` | Fly.io app config per environment |
 | `infra/terraform/` | Cloudflare DNS, TLS and firewall (Terraform) |
