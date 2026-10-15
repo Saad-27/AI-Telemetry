@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-15 (M2 step 4, the Anthropic integration, in a PR; steps 1-3 merged)
+**Last updated:** 2026-10-15 (M2 step 5, the examples, in a PR; steps 1-4 merged)
 
 ## Where the project is
 
@@ -13,9 +13,11 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Server** (`server/`): FastAPI with `/healthz` and `/readyz` only. No tables, no ingest yet.
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M2**, the SDK integrations (below). Steps 1-3 are merged. Step 4 (Anthropic)
-  is on branch `m2-anthropic-integration`, waiting for Saad's review. **Start the next session
-  at step 5, the examples**, once step 4 is merged (check its PR and CI first).
+- **In progress: M2**, the SDK integrations (below). Steps 1-4 are merged. Step 5 (examples)
+  is on branch `m2-examples`, waiting for Saad's review. Once it is merged (check its PR and CI
+  first), M2's planned steps are done: check the M2 exit criterion in brief §14, then start
+  **M3 (ingest and storage)**, which is also when hosting starts (ADR 0007) — confirm costs
+  with Saad first.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -27,6 +29,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0008 | **One shared database** for all users, with per-account limits via `entitlements()` (no per-user databases). **No rollup worker at launch**: the dashboard sums summaries at read time. Includes the multi-tenant checklist for M3 |
 | 0009 | Host detection rules the brief left open: only the hostname is read, unknown Bedrock vendor is `custom`, Vertex global region is `global`, "local" means not globally routable |
 | 0010 | OpenAI integration: wrap `create` on the resource classes, measure streams by swapping their inner iterator, dropped streams are `cancelled`, `openai` 1.30+ supported. Azure deployment names are hidden (confirmed) |
+| 0012 | Examples run offline: the fake provider acts as an HTTP proxy so clients keep real hostnames (`http://` URLs). The fake also serves Azure, Bedrock `invoke` and Vertex paths |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -77,7 +80,16 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    Saad confirmed the Azure and Bedrock ARN rules. Not covered, by choice for now: `beta.messages`
    (and the tool runner), `messages.parse()`. Saad is fine with the newer Bedrock Mantle,
    `AnthropicAWS` and `AnthropicGoogleCloud` hosts staying `custom`.
-5. **Examples** (`examples/`) that print what the SDK sends in debug mode.
+5. **Examples: IN REVIEW** (`examples/`, ADR 0012). `openai_chat.py`, `anthropic_summariser.py`,
+   `cloud_hosts.py` (Azure OpenAI, Bedrock, Vertex) and `manual_track.py`, each printing its
+   payload in debug mode with no key. `_demo.offline()` starts the fake provider and sets
+   `HTTP_PROXY`, so `http://api.openai.com/v1` and the like reach it with the real hostname.
+   The fake provider now routes by path suffix (Azure deployment paths, Bedrock `invoke`, Vertex
+   `rawPredict`/`streamRawPredict`, model from the path) and has a `model` behavior (the model
+   a reply reports). `tests/test_examples.py` runs each one and checks the events and that no
+   prompt, reply, exception text or customer name leaks; it needs the latest libraries, so the
+   compat jobs skip it. Examples are ruff-linted (Makefile, CI), not mypy-checked. Not served
+   yet: Bedrock streaming (AWS binary event stream).
 
 Never capture prompts, outputs, keys or error message text (P1-P7). Read installed library
 source, not memory, before relying on it (brief §17).

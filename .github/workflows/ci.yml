@@ -31,8 +31,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --locked
-      - run: uv run ruff check . ../../tools
-      - run: uv run ruff format --check . ../../tools
+      - run: uv run ruff check . ../../tools ../../examples
+      - run: uv run ruff format --check . ../../tools ../../examples
       - run: uv run mypy
       - run: uv run pytest -q
       - name: Overhead benchmark (brief §6.8)

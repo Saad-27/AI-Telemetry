@@ -14,7 +14,7 @@ from typing import Any
 from unittest.mock import ANY
 
 import pytest
-from fake_provider import Behavior, FakeProvider
+from fake_provider import Behavior, FakeProvider, route_of
 
 BODIES: dict[str, dict[str, Any]] = {
     "/v1/chat/completions": {"model": "m", "messages": []},
@@ -147,6 +147,25 @@ def test_timeout_is_a_long_latency(provider: FakeProvider) -> None:
     )
     with pytest.raises(TimeoutError):
         urllib.request.urlopen(req, timeout=0.2)  # noqa: S310
+
+
+@pytest.mark.parametrize(
+    ("target", "expected"),
+    [
+        ("/v1/messages", ("messages", None)),
+        ("/openai/deployments/acme-gpt/chat/completions?api-version=2024-10-21", ("chat", None)),
+        # Through the fake as an HTTP proxy, the target is the full URL.
+        ("http://acme.openai.azure.com/openai/v1/responses", ("responses", None)),
+        ("http://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1%3A0/invoke",
+         ("messages", "eu.anthropic.claude-x-v1:0")),
+        ("/v1/projects/p/locations/us-east5/publishers/anthropic/models/claude-x@1:streamRawPredict",
+         ("messages", "claude-x@1")),
+        ("/model/m/invoke-with-response-stream", (None, None)),  # AWS event stream: not served
+        ("/v2/other", (None, None)),
+    ],
+)  # fmt: skip
+def test_routes(target: str, expected: tuple[str | None, str | None]) -> None:
+    assert route_of(target) == expected
 
 
 def test_bad_behavior_header_and_unknown_route(provider: FakeProvider) -> None:
