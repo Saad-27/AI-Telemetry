@@ -312,6 +312,34 @@ def test_cancelling_an_async_task_mid_stream(measured: None, provider: FakeProvi
     assert cancelled_count() == 1
 
 
+def test_many_abandoned_calls_are_recorded_without_recursion() -> None:
+    gaslit.init(api_key=KEY)
+    for _ in range(5000):  # well past Python's recursion limit
+        call = Call("openai", "direct", "chat.completions", "m", streaming=True)
+        call.status = call.error_class = "cancelled"
+        _runtime.abandon(call)
+    with gaslit.track(provider="custom", model="m"):
+        pass
+    assert cancelled_count() == 5000
+    assert not _runtime._abandoned
+
+
+def test_a_forked_child_does_not_inherit_abandoned_calls() -> None:
+    gaslit.init(api_key=KEY)
+    _runtime.abandon(Call("openai", "direct", "chat.completions", "m"))
+    _runtime._after_fork_in_child()
+    assert not _runtime._abandoned
+
+
+def test_a_null_delta_does_not_hide_the_usage() -> None:
+    call = Call("groq", "openai_compatible", "chat.completions", "m", streaming=True)
+    m = _openai._SyncMeasure(call, iter(()), _openai._chat_item)
+    usage = SimpleNamespace(prompt_tokens=3, completion_tokens=4, prompt_tokens_details=None)
+    m.item(SimpleNamespace(model="m", choices=[SimpleNamespace(delta=None)], usage=usage))
+    assert m.reported
+    assert (call.input_tokens, call.output_tokens) == (3, 4)
+
+
 # --- Transparency (P3) --------------------------------------------------------------------
 
 

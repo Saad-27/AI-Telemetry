@@ -448,6 +448,8 @@ def _chat_item(m: _Measure, chunk: Any) -> None:
     # The first chunk with output is the first token, not the first event (brief §6.3).
     for choice in getattr(chunk, "choices", None) or ():
         delta = choice.delta
+        if delta is None:  # some compatible providers send null deltas, e.g. with usage
+            continue
         if (
             delta.content
             or delta.tool_calls

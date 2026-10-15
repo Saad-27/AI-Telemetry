@@ -35,8 +35,9 @@ state: State | None = None  # None means every SDK entry point is a no-op
 
 # Calls whose stream was garbage-collected unfinished. A finalizer can run on any thread while
 # it holds one of our locks, so it only appends here (lock-free) and the next normal entry
-# point records them.
-_abandoned: deque[Call] = deque()
+# point records them. Bounded like the queue: past the limit the oldest are dropped.
+ABANDONED_MAX = 10_000
+_abandoned: deque[Call] = deque(maxlen=ABANDONED_MAX)
 
 
 def init(enabled: object, instrument: object = None, **options: Any) -> None:
@@ -64,13 +65,13 @@ def abandon(call: Call) -> None:
     _abandoned.append(call)
 
 
-def _drain_abandoned() -> None:
-    while _abandoned:
+def _drain_abandoned(s: State) -> None:
+    while True:
         try:
             call = _abandoned.popleft()
-        except IndexError:  # another thread got there first
+        except IndexError:  # empty, or another thread got there first
             return
-        record(call)
+        _add(s, call)
 
 
 def record(call: Call) -> None:
@@ -79,7 +80,11 @@ def record(call: Call) -> None:
     if s is None:
         return
     if _abandoned:
-        _drain_abandoned()
+        _drain_abandoned(s)
+    _add(s, call)
+
+
+def _add(s: State, call: Call) -> None:
     s.sender.start()  # lazily, on the first call; a no-op afterwards
     reason = s.aggregator.add(call)
     if (
@@ -99,14 +104,15 @@ def record(call: Call) -> None:
 def flush(timeout: float) -> None:
     s = state
     if s is not None:
-        _drain_abandoned()
+        _drain_abandoned(s)
         s.sender.flush(timeout)
 
 
 def shutdown(timeout: float) -> None:
     """Flush, then stop. Calls made afterwards are not measured."""
     global state
-    _drain_abandoned()
+    if (current := state) is not None:
+        _drain_abandoned(current)
     with _lock:
         s, state = state, None
     if s is not None:
@@ -125,6 +131,7 @@ def _after_fork_in_child() -> None:
     # The parent sends its own data; the child starts empty, with no sender thread yet.
     global _lock, state
     _lock = threading.Lock()  # may have been held by another thread at fork time
+    _abandoned.clear()  # the parent records its own
     if state is not None:
         state = State(state.config)
 

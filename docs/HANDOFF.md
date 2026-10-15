@@ -23,6 +23,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0006 | Production only, no staging. Each deploy needs Saad's approval in GitHub |
 | 0007 | Database on **Neon** (Free while testing, Frankfurt). One 256 MB Fly machine that scales to zero. No hosting before M3 |
 | 0008 | **One shared database** for all users, with per-account limits via `entitlements()` (no per-user databases). **No rollup worker at launch**: the dashboard sums summaries at read time. Includes the multi-tenant checklist for M3 |
+| 0009 | Host detection rules the brief left open: only the hostname is read, unknown Bedrock vendor is `custom`, Vertex global region is `global`, "local" means not globally routable |
+| 0010 | OpenAI integration: wrap `create` on the resource classes, measure streams by swapping their inner iterator, dropped streams are `cancelled`, `openai` 1.30+ supported. Azure deployment names are hidden (**Saad to confirm**) |
 
 ## Platform status (outside the repo)
 
@@ -41,7 +43,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 
 1. **Fake provider server: DONE** (`tools/fake-provider/fake_provider.py`, stdlib only). Serves
    `/v1/chat/completions`, `/v1/responses` and `/v1/messages`, streaming or not. Control it per
-   call with a `Behavior` (`status`, `latency_ms`, `chunk_ms`, `chunks`, `retry_after_s`), the
+   call with a `Behavior` (`status`, `latency_ms`, `chunk_ms`, `chunks`, `retry_after_s`, and for
+   privacy tests `word` (the reply text) and `echo` (errors quote the request)), the
    `x-fake-behavior` header, or `FakeProvider.script(...)` in tests. A timeout is a `latency_ms`
    above the client's timeout. Checked against the real `openai` and `anthropic` clients (ad hoc,
    not a repo dependency); `sdk/python/tests/test_fake_provider.py` covers it with plain HTTP.
@@ -49,12 +52,13 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    Bedrock/Vertex paths. Real clients retry 429/5xx by default, so tests use `max_retries=0`.
 2. **Host and route detection: DONE** (`sdk/python/src/gaslit/_hosts.py`, ADR 0009).
    `detect(base_url, model)` returns `Endpoint(provider, route, host, region)`; it reads only the
-   hostname and never raises. Not yet called by anything: the integrations (steps 3-4) call it
-   once per client, not per request. Server-side re-validation of the allowlist is M3.
+   hostname and never raises. Called on every request, behind two small caches (URL to host,
+   host to endpoint). Server-side re-validation of the allowlist is M3.
 3. **OpenAI integration: DONE** (`sdk/python/src/gaslit/_openai.py`, ADR 0010). `init()` now
    patches `openai` (`instrument=` param). Tested on openai 1.30.0, 1.66.0, 2.0.0 and latest
-   (3.31.0); CI has an `sdk-compat` job. Overhead (benchmark): ~15 µs per call, 0.5-0.8 µs per
-   streamed item. **Waiting for Saad:** on Azure the `model` argument is the customer's deployment
+   (3.31.0); CI has an `sdk-compat` job. Overhead (benchmark): ~10-15 µs per call, under 1 µs per
+   streamed item. Streams dropped unfinished are recorded via a lock-free queue in `_runtime`
+   (`abandon()`), because a garbage-collection finalizer may run while an SDK lock is held. **Waiting for Saad:** on Azure the `model` argument is the customer's deployment
    name, so `model_requested` is reported as `azure-deployment` (ADR 0010 point 5). Not covered
    yet: `with_raw_response`/`with_streaming_response` (status and duration only), `parse()` and
    `stream()` helpers that bypass `create`, embeddings.

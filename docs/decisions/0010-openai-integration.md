@@ -26,7 +26,8 @@ against the `openai` source (latest 3.31.0, which now uses `httpx2`) and run aga
    version, the call is still counted with partial timings and one warning.
 4. **A stream dropped unfinished is `cancelled`, via `weakref.finalize`.** A finalizer can run on
    any thread while it holds one of the SDK's locks, so it only appends the call to a lock-free
-   deque (`_runtime.abandon`); the next normal call, `flush()` or `shutdown()` records it. The
+   deque (`_runtime.abandon`, bounded at 10,000); the next normal call, `flush()` or `shutdown()`
+   records it, in a loop rather than recursively. A forked child starts with the deque empty. The
    callback holds the open call, never the stream, so it can't keep the stream alive (tested).
 5. **Azure: `model_requested` is the fixed text `azure-deployment`.** On Azure the `model`
    argument is the customer's own deployment name, which can contain a company or project

@@ -3,8 +3,9 @@
 Run: uv run python tests/bench_overhead.py
 
 The SDK runs as in production, sending to a local fake ingest from its background thread,
-so the numbers include contention with the sender. Times are whole ``track()`` blocks,
-not differences from a baseline, so they overstate the true overhead slightly.
+so the numbers include contention with the sender. ``track()`` times are whole blocks, not
+differences from a baseline, so they overstate the true overhead slightly. The openai numbers
+are differences from the same call or iteration without the SDK.
 """
 
 from __future__ import annotations
