@@ -312,7 +312,7 @@ def test_cancelling_an_async_task_mid_stream(measured: None, provider: FakeProvi
     assert cancelled_count() == 1
 
 
-def test_many_abandoned_calls_are_recorded_without_recursion() -> None:
+def test_a_backlog_of_abandoned_calls_is_drained_a_little_per_call() -> None:
     gaslit.init(api_key=KEY)
     for _ in range(5000):  # well past Python's recursion limit
         call = Call("openai", "direct", "chat.completions", "m", streaming=True)
@@ -320,7 +320,9 @@ def test_many_abandoned_calls_are_recorded_without_recursion() -> None:
         _runtime.abandon(call)
     with gaslit.track(provider="custom", model="m"):
         pass
-    assert cancelled_count() == 5000
+    assert cancelled_count() == _runtime.DRAIN_PER_CALL  # one call does a bounded share
+    gaslit.flush()
+    assert cancelled_count() == 5000 - _runtime.DRAIN_PER_CALL  # flush() takes the rest
     assert not _runtime._abandoned
 
 

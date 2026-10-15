@@ -35,8 +35,11 @@ state: State | None = None  # None means every SDK entry point is a no-op
 
 # Calls whose stream was garbage-collected unfinished. A finalizer can run on any thread while
 # it holds one of our locks, so it only appends here (lock-free) and the next normal entry
-# point records them. Bounded like the queue: past the limit the oldest are dropped.
+# point records them. Bounded like the queue: past the limit the oldest are dropped. A call
+# records at most DRAIN_PER_CALL of them, so a backlog never slows one call down much;
+# flush() and shutdown() take the rest.
 ABANDONED_MAX = 10_000
+DRAIN_PER_CALL = 32
 _abandoned: deque[Call] = deque(maxlen=ABANDONED_MAX)
 
 
@@ -65,8 +68,8 @@ def abandon(call: Call) -> None:
     _abandoned.append(call)
 
 
-def _drain_abandoned(s: State) -> None:
-    while True:
+def _drain_abandoned(s: State, limit: int = ABANDONED_MAX) -> None:
+    for _ in range(limit):
         try:
             call = _abandoned.popleft()
         except IndexError:  # empty, or another thread got there first
@@ -80,7 +83,7 @@ def record(call: Call) -> None:
     if s is None:
         return
     if _abandoned:
-        _drain_abandoned(s)
+        _drain_abandoned(s, DRAIN_PER_CALL)
     _add(s, call)
 
 
