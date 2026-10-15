@@ -94,8 +94,9 @@ def _by_host(host: str) -> Endpoint:
     return CUSTOM if ip.is_global else LOCAL
 
 
-def _hostname(base_url: object) -> str | None:
-    text = str(base_url).strip()
+@lru_cache(maxsize=64)
+def _hostname(text: str) -> str | None:
+    text = text.strip()
     if "://" not in text:
         text = "//" + text
     host = urlsplit(text).hostname  # drops credentials, port, path and query
@@ -122,7 +123,7 @@ def detect(base_url: object, model: object = None) -> Endpoint:
     """Classify an endpoint from its base URL. ``model`` is only read to pick the vendor on
     Bedrock and Vertex, and is never stored."""
     try:
-        host = _hostname(base_url)
+        host = _hostname(str(base_url))
         if host is None:
             return CUSTOM
         found = _by_host(host)

@@ -38,6 +38,31 @@ jobs:
       - name: Overhead benchmark (brief §6.8)
         run: uv run python tests/bench_overhead.py
 
+  # The OpenAI integration against older openai releases (brief §6.9). The latest is already
+  # covered by the sdk job, which uses the locked version.
+  sdk-compat:
+    name: sdk (openai ${{ matrix.openai }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        openai: ["1.30.0", "1.66.0", "2.0.0"]
+    defaults:
+      run:
+        working-directory: sdk/python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.10"
+      - run: uv sync --locked
+      # openai 1.x passes `proxies` to httpx, which httpx 0.28 removed.
+      - run: >-
+          uv run --with "openai==${{ matrix.openai }}" --with "httpx<0.28"
+          pytest -q tests/test_openai.py tests/test_openai_privacy.py
+
   server:
     runs-on: ubuntu-latest
     defaults:

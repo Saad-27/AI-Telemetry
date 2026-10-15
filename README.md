@@ -4,7 +4,8 @@ Open-source SDK plus a hosted dashboard that answers "is it me, or the model pro
 using metadata from your app's own AI model calls. No prompts, outputs or keys are ever
 collected. See [PROJECT_BRIEF.md](PROJECT_BRIEF.md) for the full design.
 
-**Status:** M0 (foundations). Nothing is instrumented yet.
+**Status:** M2 (SDK integrations) in progress. The Python SDK measures `openai` calls
+automatically and anything else through `track()`. Nothing is hosted yet.
 
 ## Layout
 
@@ -12,6 +13,7 @@ collected. See [PROJECT_BRIEF.md](PROJECT_BRIEF.md) for the full design.
 |---|---|
 | `sdk/python/` | `gaslit` Python SDK (Apache-2.0, zero runtime dependencies, Python 3.10+) |
 | `server/` | FastAPI service (Python 3.12). Currently `/healthz` and `/readyz` only |
+| `tools/fake-provider/` | Fake OpenAI and Anthropic API for tests and demos (no tokens spent) |
 | `docs/decisions/` | Architecture decision records |
 | `deploy/fly/` | Fly.io app config per environment |
 | `infra/terraform/` | Cloudflare DNS, TLS and firewall (Terraform) |

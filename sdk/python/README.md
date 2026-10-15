@@ -3,8 +3,10 @@
 Passive reliability metrics for the AI model calls your app already makes.
 Metadata only: no prompts, outputs or keys ever leave your process.
 
-Status: pre-release (milestone M1). Manual instrumentation with `track()` works; automatic
-`openai` and `anthropic` instrumentation arrives in M2.
+Status: pre-release (milestone M2). Calls made with the `openai` library (1.30+:
+`chat.completions.create` and `responses.create`, sync and async, streaming or not) are measured
+automatically after `init()`, including Azure and OpenAI-compatible endpoints. `anthropic`
+support is next. Anything else can be measured by hand with `track()`.
 
 ```python
 import gaslit
@@ -21,7 +23,9 @@ with gaslit.track(provider="custom", model="my-finetune", streaming=True) as t:
   stderr exactly as sent. Without a key it prints and sends nothing.
 - **Serverless and short scripts:** call `gaslit.flush()` at the end of each handler. Background
   threads may be frozen between invocations. Data is also flushed at normal interpreter exit.
-- **Turn it off:** `GASLIT_ENABLED=false`.
+- **Choose libraries:** `init(instrument=["openai"])`. The default is every supported library
+  that is installed; `instrument=[]` measures only `track()` blocks.
+- **Turn it off:** `GASLIT_ENABLED=false`. Nothing is patched.
 
 ## Local development
 

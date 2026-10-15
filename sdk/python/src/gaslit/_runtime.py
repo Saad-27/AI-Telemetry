@@ -5,6 +5,7 @@ from __future__ import annotations
 import atexit
 import os
 import threading
+from collections import deque
 from typing import Any
 
 from . import _log
@@ -32,8 +33,17 @@ _initialised = False
 _hooks_registered = False
 state: State | None = None  # None means every SDK entry point is a no-op
 
+# Calls whose stream was garbage-collected unfinished. A finalizer can run on any thread while
+# it holds one of our locks, so it only appends here (lock-free) and the next normal entry
+# point records them. Bounded like the queue: past the limit the oldest are dropped. A call
+# records at most DRAIN_PER_CALL of them, so a backlog never slows one call down much;
+# flush() and shutdown() take the rest.
+ABANDONED_MAX = 10_000
+DRAIN_PER_CALL = 32
+_abandoned: deque[Call] = deque(maxlen=ABANDONED_MAX)
 
-def init(enabled: object, **options: Any) -> None:
+
+def init(enabled: object, instrument: object = None, **options: Any) -> None:
     global _initialised, state
     with _lock:
         if _initialised:
@@ -48,6 +58,23 @@ def init(enabled: object, **options: Any) -> None:
         if config.can_send or config.debug:
             state = State(config)
             _register_hooks()
+            from . import _openai
+
+            _openai.install(instrument)
+
+
+def abandon(call: Call) -> None:
+    """Hand over a call from a garbage-collection finalizer. Takes no locks."""
+    _abandoned.append(call)
+
+
+def _drain_abandoned(s: State, limit: int = ABANDONED_MAX) -> None:
+    for _ in range(limit):
+        try:
+            call = _abandoned.popleft()
+        except IndexError:  # empty, or another thread got there first
+            return
+        _add(s, call)
 
 
 def record(call: Call) -> None:
@@ -55,6 +82,12 @@ def record(call: Call) -> None:
     s = state
     if s is None:
         return
+    if _abandoned:
+        _drain_abandoned(s, DRAIN_PER_CALL)
+    _add(s, call)
+
+
+def _add(s: State, call: Call) -> None:
     s.sender.start()  # lazily, on the first call; a no-op afterwards
     reason = s.aggregator.add(call)
     if (
@@ -74,12 +107,15 @@ def record(call: Call) -> None:
 def flush(timeout: float) -> None:
     s = state
     if s is not None:
+        _drain_abandoned(s)
         s.sender.flush(timeout)
 
 
 def shutdown(timeout: float) -> None:
     """Flush, then stop. Calls made afterwards are not measured."""
     global state
+    if (current := state) is not None:
+        _drain_abandoned(current)
     with _lock:
         s, state = state, None
     if s is not None:
@@ -98,6 +134,7 @@ def _after_fork_in_child() -> None:
     # The parent sends its own data; the child starts empty, with no sender thread yet.
     global _lock, state
     _lock = threading.Lock()  # may have been held by another thread at fork time
+    _abandoned.clear()  # the parent records its own
     if state is not None:
         state = State(state.config)
 
@@ -119,5 +156,6 @@ def reset() -> None:
         _initialised = False
         s, state = state, None
         _log.reset()
+        _abandoned.clear()
     if s is not None:
         s.sender.stop(0)

@@ -41,19 +41,24 @@ class Behavior:
     chunks: int = 5  # The reply is this many tokens long, so it reports this many output tokens.
     input_tokens: int = 10
     retry_after_s: int = 0  # Sent as Retry-After on an error status when above 0.
+    word: str = "word"  # The reply is word0 word1 ...; a test sets this to find the reply later.
+    echo: int = 0  # 1: an error message quotes the request's messages, as real providers can.
+
+    def token(self, i: int) -> str:
+        return f"{self.word}{i} "
 
     @classmethod
     def parse(cls, text: str) -> Behavior:
         """Parse ``status=429,latency_ms=200``. Raises ValueError on a bad name or value."""
-        known = {f.name for f in fields(cls)}
-        values: dict[str, int] = {}
+        kinds: dict[str, Any] = {f.name: type(f.default) for f in fields(cls)}
+        values: dict[str, Any] = {}
         for pair in text.replace(" ", ",").split(","):
             if not pair:
                 continue
             name, _, value = pair.partition("=")
-            if name not in known:
-                raise ValueError(f"unknown behavior {name!r}; known: {sorted(known)}")
-            values[name] = int(value)
+            if name not in kinds:
+                raise ValueError(f"unknown behavior {name!r}; known: {sorted(kinds)}")
+            values[name] = kinds[name](value)
         return cls(**values)
 
 
@@ -78,20 +83,16 @@ ROUTES = {
 }
 
 
-def token(i: int) -> str:
-    return f"word{i} "
-
-
-def error_body(route: str, status: int) -> dict[str, Any]:
+def error_body(route: str, status: int, detail: str = "") -> dict[str, Any]:
     anthropic, openai, code = ERROR_TYPES.get(status, ("api_error", "server_error", "server_error"))
-    message = f"Fake provider error {status}"
+    message = f"Fake provider error {status} {detail}".strip()
     if route == "messages":
         return {"type": "error", "error": {"type": anthropic, "message": message}}
     return {"error": {"message": message, "type": openai, "param": None, "code": code}}
 
 
 def message_body(route: str, model: str, b: Behavior) -> dict[str, Any]:
-    text = "".join(token(i) for i in range(b.chunks))
+    text = "".join(b.token(i) for i in range(b.chunks))
     now = int(time.time())
     usage = {"input_tokens": b.input_tokens, "output_tokens": b.chunks}
     if route == "messages":
@@ -149,7 +150,7 @@ def stream_events(route: str, model: str, b: Behavior, include_usage: bool) -> l
         groups: list[list[Event]] = [[("message_start", start), ("content_block_start", block)]]
         groups += [
             [("content_block_delta", {"type": "content_block_delta", "index": 0,
-                                      "delta": {"type": "text_delta", "text": token(i)}})]
+                                      "delta": {"type": "text_delta", "text": b.token(i)}})]
             for i in range(b.chunks)
         ]  # fmt: skip
         groups.append([
@@ -176,7 +177,7 @@ def stream_events(route: str, model: str, b: Behavior, include_usage: bool) -> l
         groups += [
             [("response.output_text.delta",
               {"type": "response.output_text.delta", "output_index": 0, "item_id": "msg_fake",
-               "content_index": 0, "delta": token(i)})]
+               "content_index": 0, "delta": b.token(i)})]
             for i in range(b.chunks)
         ]  # fmt: skip
         text = done["output"][0]["content"][0]["text"]
@@ -199,7 +200,7 @@ def stream_events(route: str, model: str, b: Behavior, include_usage: bool) -> l
         })  # fmt: skip
 
     groups = [[chunk({"role": "assistant", "content": ""}, None)]]
-    groups += [[chunk({"content": token(i)}, None)] for i in range(b.chunks)]
+    groups += [[chunk({"content": b.token(i)}, None)] for i in range(b.chunks)]
     last = [chunk({}, "stop")]
     if include_usage:
         last.append(("", {
@@ -288,7 +289,12 @@ class FakeProvider:
                         headers = {}
                         if behavior.retry_after_s:
                             headers["Retry-After"] = str(behavior.retry_after_s)
-                        self._send(behavior.status, error_body(route, behavior.status), headers)
+                        detail = (
+                            str(body.get("messages") or body.get("input")) if behavior.echo else ""
+                        )
+                        self._send(
+                            behavior.status, error_body(route, behavior.status, detail), headers
+                        )
                     elif stream:
                         self._stream(route, model, behavior, usage)
                     else:
