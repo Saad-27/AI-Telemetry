@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-15 (M2 step 1)
+**Last updated:** 2026-10-15 (M2 step 3)
 
 ## Where the project is
 
@@ -13,7 +13,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Server** (`server/`): FastAPI with `/healthz` and `/readyz` only. No tables, no ingest yet.
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M2**, the SDK integrations (below). Steps 1 and 2 are done.
+- **In progress: M2**, the SDK integrations (below). Steps 1-3 are done.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -51,12 +51,20 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    `detect(base_url, model)` returns `Endpoint(provider, route, host, region)`; it reads only the
    hostname and never raises. Not yet called by anything: the integrations (steps 3-4) call it
    once per client, not per request. Server-side re-validation of the allowlist is M3.
-3. **OpenAI integration**: `chat.completions` and `responses`, sync and async, streaming and not.
+3. **OpenAI integration: DONE** (`sdk/python/src/gaslit/_openai.py`, ADR 0010). `init()` now
+   patches `openai` (`instrument=` param). Tested on openai 1.30.0, 1.66.0, 2.0.0 and latest
+   (3.31.0); CI has an `sdk-compat` job. Overhead (benchmark): ~15 µs per call, 0.5-0.8 µs per
+   streamed item. **Waiting for Saad:** on Azure the `model` argument is the customer's deployment
+   name, so `model_requested` is reported as `azure-deployment` (ADR 0010 point 5). Not covered
+   yet: `with_raw_response`/`with_streaming_response` (status and duration only), `parse()` and
+   `stream()` helpers that bypass `create`, embeddings.
 4. **Anthropic integration**: `messages.create` and `messages.stream`, sync and async.
 5. **Examples** (`examples/`) that print what the SDK sends in debug mode.
 
-Before 3 and 4: check the current `openai` and `anthropic` Python SDK internals against their
-docs (brief §17). Never capture prompts, outputs, keys or error message text (P1-P7).
+Before 4: check the current `anthropic` Python SDK internals against its docs (brief §17). Step 3
+found that the SDKs have moved on: `openai` 3.x uses `httpx2`, so read the installed source, not
+memory. Step 4 should reuse `_Measure`/`_runtime.abandon` from `_openai.py` where the shapes match
+(move them to a shared module then, not before). Never capture prompts, outputs, keys or error message text (P1-P7).
 
 ## Loose ends
 

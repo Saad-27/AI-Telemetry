@@ -7,6 +7,8 @@ Internals are imported lazily, so even the stdlib modules they need load only on
 
 TYPE_CHECKING = False
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from ._track import Tracker
 
 __version__ = "0.0.0"
@@ -28,11 +30,15 @@ def init(
     sample_rate: float = 0.05,
     max_samples_per_minute: int = 10,
     origin_region: str | None = None,
+    instrument: "Iterable[str] | None" = None,
 ) -> None:
     """Start measuring. Reads ``GASLIT_KEY`` and other ``GASLIT_*`` variables.
 
     Idempotent and never raises. Without a key it warns once and does nothing,
     unless ``debug=True``, which prints payloads locally instead of sending them.
+
+    ``instrument`` names the libraries to measure automatically, for example ``["openai"]``.
+    The default is every supported library that is installed; ``[]`` measures none.
     """
     try:
         from . import _runtime
@@ -50,6 +56,7 @@ def init(
             sample_rate=sample_rate,
             max_samples_per_minute=max_samples_per_minute,
             origin_region=origin_region,
+            instrument=instrument,
         )
     except Exception:  # noqa: S110 (fail open, P4)
         pass

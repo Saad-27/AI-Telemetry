@@ -5,6 +5,7 @@ from __future__ import annotations
 import atexit
 import os
 import threading
+from collections import deque
 from typing import Any
 
 from . import _log
@@ -32,8 +33,13 @@ _initialised = False
 _hooks_registered = False
 state: State | None = None  # None means every SDK entry point is a no-op
 
+# Calls whose stream was garbage-collected unfinished. A finalizer can run on any thread while
+# it holds one of our locks, so it only appends here (lock-free) and the next normal entry
+# point records them.
+_abandoned: deque[Call] = deque()
 
-def init(enabled: object, **options: Any) -> None:
+
+def init(enabled: object, instrument: object = None, **options: Any) -> None:
     global _initialised, state
     with _lock:
         if _initialised:
@@ -48,6 +54,23 @@ def init(enabled: object, **options: Any) -> None:
         if config.can_send or config.debug:
             state = State(config)
             _register_hooks()
+            from . import _openai
+
+            _openai.install(instrument)
+
+
+def abandon(call: Call) -> None:
+    """Hand over a call from a garbage-collection finalizer. Takes no locks."""
+    _abandoned.append(call)
+
+
+def _drain_abandoned() -> None:
+    while _abandoned:
+        try:
+            call = _abandoned.popleft()
+        except IndexError:  # another thread got there first
+            return
+        record(call)
 
 
 def record(call: Call) -> None:
@@ -55,6 +78,8 @@ def record(call: Call) -> None:
     s = state
     if s is None:
         return
+    if _abandoned:
+        _drain_abandoned()
     s.sender.start()  # lazily, on the first call; a no-op afterwards
     reason = s.aggregator.add(call)
     if (
@@ -74,12 +99,14 @@ def record(call: Call) -> None:
 def flush(timeout: float) -> None:
     s = state
     if s is not None:
+        _drain_abandoned()
         s.sender.flush(timeout)
 
 
 def shutdown(timeout: float) -> None:
     """Flush, then stop. Calls made afterwards are not measured."""
     global state
+    _drain_abandoned()
     with _lock:
         s, state = state, None
     if s is not None:
@@ -119,5 +146,6 @@ def reset() -> None:
         _initialised = False
         s, state = state, None
         _log.reset()
+        _abandoned.clear()
     if s is not None:
         s.sender.stop(0)
