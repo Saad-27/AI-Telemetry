@@ -22,7 +22,7 @@ from conftest import KEY
 from fake_provider import Behavior, FakeProvider
 
 import gaslit
-from gaslit import _openai, _runtime
+from gaslit import _openai, _runtime, _wrap
 from gaslit._model import Call
 
 PROMPT = "hello"
@@ -335,7 +335,7 @@ def test_a_forked_child_does_not_inherit_abandoned_calls() -> None:
 
 def test_a_null_delta_does_not_hide_the_usage() -> None:
     call = Call("groq", "openai_compatible", "chat.completions", "m", streaming=True)
-    m = _openai._SyncMeasure(call, iter(()), _openai._chat_item)
+    m = _wrap.SyncMeasure(call, iter(()), _openai._chat_item, _openai._mark_error)
     usage = SimpleNamespace(prompt_tokens=3, completion_tokens=4, prompt_tokens_details=None)
     m.item(SimpleNamespace(model="m", choices=[SimpleNamespace(delta=None)], usage=usage))
     assert m.reported

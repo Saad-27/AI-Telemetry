@@ -40,9 +40,13 @@ class Behavior:
     chunk_ms: int = 0  # Streaming: the gap between tokens, for a slow stream.
     chunks: int = 5  # The reply is this many tokens long, so it reports this many output tokens.
     input_tokens: int = 10
+    cached_tokens: int = 0  # Anthropic: prompt tokens read from the cache, on top of input_tokens.
     retry_after_s: int = 0  # Sent as Retry-After on an error status when above 0.
     word: str = "word"  # The reply is word0 word1 ...; a test sets this to find the reply later.
     echo: int = 0  # 1: an error message quotes the request's messages, as real providers can.
+    # Anthropic streams: after the tokens, an error event with this status's error type (HTTP
+    # stays 200), as Anthropic reports a failure mid-stream. 0: the stream ends normally.
+    stream_error: int = 0
 
     def token(self, i: int) -> str:
         return f"{self.word}{i} "
@@ -96,6 +100,7 @@ def message_body(route: str, model: str, b: Behavior) -> dict[str, Any]:
     now = int(time.time())
     usage = {"input_tokens": b.input_tokens, "output_tokens": b.chunks}
     if route == "messages":
+        usage.update(cache_creation_input_tokens=0, cache_read_input_tokens=b.cached_tokens)
         return {
             "id": "msg_fake", "type": "message", "role": "assistant", "model": model,
             "content": [{"type": "text", "text": text}], "stop_reason": "end_turn",
@@ -137,7 +142,12 @@ def stream_events(route: str, model: str, b: Behavior, include_usage: bool) -> l
     ``latency_ms`` (the first token), then each later group after ``chunk_ms``."""
     now = int(time.time())
     if route == "messages":
-        usage = {"input_tokens": b.input_tokens, "output_tokens": 1}
+        usage = {
+            "input_tokens": b.input_tokens,
+            "output_tokens": 1,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": b.cached_tokens,
+        }
         start = {
             "type": "message_start",
             "message": {
@@ -153,6 +163,9 @@ def stream_events(route: str, model: str, b: Behavior, include_usage: bool) -> l
                                       "delta": {"type": "text_delta", "text": b.token(i)}})]
             for i in range(b.chunks)
         ]  # fmt: skip
+        if b.stream_error:
+            groups.append([("error", error_body(route, b.stream_error))])
+            return groups
         groups.append([
             ("content_block_stop", {"type": "content_block_stop", "index": 0}),
             ("message_delta", {"type": "message_delta",

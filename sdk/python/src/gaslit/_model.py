@@ -45,8 +45,13 @@ DECODE_MIN_TOKENS = 16
 
 OK, ERROR, CANCELLED = "ok", "error", "cancelled"
 
-_QUOTA_CODES = frozenset({"insufficient_quota"})
-_OVERLOADED_CODES = frozenset({"overloaded_error"})
+# Short error codes that decide the class whatever the HTTP status.
+_CODE_CLASSES = {
+    "insufficient_quota": "quota_error",  # OpenAI, sent with 429
+    "billing_error": "quota_error",  # Anthropic
+    "overloaded_error": "overloaded",  # Anthropic
+    "timeout_error": "timeout",  # Anthropic, sent with 504
+}
 _STATUS_CLASSES = {
     401: "auth_error",
     403: "auth_error",
@@ -73,10 +78,8 @@ def input_bucket(input_tokens: int | None) -> str:
 
 def classify_http(http_status: int | None, code: str | None) -> str:
     """Map an HTTP status and short error code to an ``error_class``. Never reads message text."""
-    if code in _QUOTA_CODES:
-        return "quota_error"
-    if code in _OVERLOADED_CODES:
-        return "overloaded"
+    if code is not None and (by_code := _CODE_CLASSES.get(code)):
+        return by_code
     if http_status is None:
         return "unknown"
     known = _STATUS_CLASSES.get(http_status)

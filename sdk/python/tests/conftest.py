@@ -3,7 +3,7 @@ from collections.abc import Iterator
 import pytest
 from fake_ingest import FakeIngest
 
-from gaslit import _openai, _runtime
+from gaslit import _anthropic, _openai, _runtime
 from gaslit._config import REGION_ENV_VARS
 from gaslit._sender import Sender
 
@@ -26,7 +26,8 @@ def clean_sdk(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -
     _runtime.reset()
     yield
     _runtime.reset()
-    _openai.uninstall()  # init() patches the openai library; leave it as found
+    _openai.uninstall()  # init() patches the provider libraries; leave them as found
+    _anthropic.uninstall()
 
 
 @pytest.fixture

@@ -124,6 +124,8 @@ class Sender:
             self._woken = True
             self._cond.notify_all()
             while self._flush_done < target:
+                if self._stopping:  # e.g. the key was rejected: nothing more will be sent
+                    return False
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False
