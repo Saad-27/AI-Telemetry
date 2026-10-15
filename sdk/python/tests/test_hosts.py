@@ -53,6 +53,8 @@ CASES = [
      "google", "vertex", "europe-west4-aiplatform.googleapis.com", "europe-west4"),
     ("https://aiplatform.googleapis.com", "gemini-2.5-flash",
      "google", "vertex", "aiplatform.googleapis.com", "global"),
+    ("https://aiplatform.eu.rep.googleapis.com/v1", "claude-sonnet-4@20250514",
+     "anthropic", "vertex", "aiplatform.eu.rep.googleapis.com", "eu"),
     ("https://us-central1-aiplatform.googleapis.com", "meta/llama-3.3-70b-instruct-maas",
      "meta", "vertex", "us-central1-aiplatform.googleapis.com", "us-central1"),
     ("https://us-central1-aiplatform.googleapis.com", None,

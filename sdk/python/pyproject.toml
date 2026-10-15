@@ -19,7 +19,7 @@ classifiers = [
 ]
 
 [dependency-groups]
-dev = ["pytest", "mypy", "ruff", "openai"]
+dev = ["pytest", "mypy", "ruff", "openai", "anthropic"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gaslit"]

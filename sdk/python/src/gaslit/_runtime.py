@@ -58,9 +58,10 @@ def init(enabled: object, instrument: object = None, **options: Any) -> None:
         if config.can_send or config.debug:
             state = State(config)
             _register_hooks()
-            from . import _openai
+            from . import _anthropic, _openai
 
             _openai.install(instrument)
+            _anthropic.install(instrument)
 
 
 def abandon(call: Call) -> None:

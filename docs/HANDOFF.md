@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-15 (M2 steps 1-3 merged: PRs #13, #14, #15)
+**Last updated:** 2026-10-15 (M2 step 4, the Anthropic integration, in a PR; steps 1-3 merged)
 
 ## Where the project is
 
@@ -13,8 +13,9 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Server** (`server/`): FastAPI with `/healthz` and `/readyz` only. No tables, no ingest yet.
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M2**, the SDK integrations (below). Steps 1-3 are merged and CI is green.
-  **Start the next session at step 4, the Anthropic integration.**
+- **In progress: M2**, the SDK integrations (below). Steps 1-3 are merged. Step 4 (Anthropic)
+  is on branch `m2-anthropic-integration`, waiting for Saad's review. **Start the next session
+  at step 5, the examples**, once step 4 is merged (check its PR and CI first).
 
 ## Decisions made recently (details in the ADRs)
 
@@ -25,7 +26,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0007 | Database on **Neon** (Free while testing, Frankfurt). One 256 MB Fly machine that scales to zero. No hosting before M3 |
 | 0008 | **One shared database** for all users, with per-account limits via `entitlements()` (no per-user databases). **No rollup worker at launch**: the dashboard sums summaries at read time. Includes the multi-tenant checklist for M3 |
 | 0009 | Host detection rules the brief left open: only the hostname is read, unknown Bedrock vendor is `custom`, Vertex global region is `global`, "local" means not globally routable |
-| 0010 | OpenAI integration: wrap `create` on the resource classes, measure streams by swapping their inner iterator, dropped streams are `cancelled`, `openai` 1.30+ supported. Azure deployment names are hidden (**Saad to confirm**) |
+| 0010 | OpenAI integration: wrap `create` on the resource classes, measure streams by swapping their inner iterator, dropped streams are `cancelled`, `openai` 1.30+ supported. Azure deployment names are hidden (confirmed) |
+| 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
 
@@ -61,30 +63,34 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    call, under 1 µs per streamed item. Streams dropped unfinished are handed to a lock-free,
    bounded queue in `_runtime` (`abandon()`), because a garbage-collection finalizer may run
    while an SDK lock is held; each later call records at most 32 of them and `flush()` takes the
-   rest. **Waiting for Saad:** on Azure the `model` argument is the customer's deployment name, so
+   rest. Confirmed by Saad: on Azure the `model` argument is the customer's deployment name, so
    `model_requested` is reported as `azure-deployment` (ADR 0010 point 5). Not covered yet:
    `with_raw_response`/`with_streaming_response` (status and duration only), `parse()` and
    `stream()` helpers that bypass `create`, embeddings.
-4. **Anthropic integration**: `messages.create` and `messages.stream`, sync and async.
+4. **Anthropic integration: IN REVIEW** (`sdk/python/src/gaslit/_anthropic.py`, ADR 0011).
+   `messages.create` (sync/async, streaming or not) and the `messages.stream()` helper; the
+   Bedrock, Vertex and Foundry clients share the same classes. The shared wrapper and stream code
+   moved from `_openai.py` to `_wrap.py`. Tested on anthropic 0.28.0, 0.50.0, 0.124.0, 1.0.0 and
+   1.15.0 (latest); the `sdk-compat` CI job now runs both libraries (older ones need
+   `httpx<0.28`). Overhead: ~13 µs per call, ~0.4 µs per streamed event. The fake provider
+   gained `cached_tokens` and `stream_error` (an Anthropic `error` event after HTTP 200).
+   Saad confirmed the Azure and Bedrock ARN rules. Not covered, by choice for now: `beta.messages`
+   (and the tool runner), `messages.parse()`. Saad is fine with the newer Bedrock Mantle,
+   `AnthropicAWS` and `AnthropicGoogleCloud` hosts staying `custom`.
 5. **Examples** (`examples/`) that print what the SDK sends in debug mode.
 
-Before 4: read the installed `anthropic` source, not memory (brief §17). The SDKs have moved on:
-`openai` 3.x uses `httpx2`, and `anthropic` was at 1.14.0 on 2026-10-15. Never capture prompts,
-outputs, keys or error message text (P1-P7).
+Never capture prompts, outputs, keys or error message text (P1-P7). Read installed library
+source, not memory, before relying on it (brief §17).
 
-**How step 3 was built, to copy for step 4:**
-- Reuse `_Measure`, `_runtime.abandon` and the wrapper shapes from `_openai.py` where they fit.
-  Move shared parts to a common module then, not before. `messages.stream(...)` returns a context
-  manager, so it needs its own wrapper (brief §6.3).
-- Test with the real client against the fake provider (`max_retries=0`), as
-  `tests/test_openai.py` and `tests/test_openai_privacy.py` do. Copy their shape: the matrix,
-  error classes, cancellation, transparency, fault injection and privacy sentinels.
-- Test gotchas: cancelled calls are counted but not sampled, so read them from the summaries.
-  Fault injection must patch the name where it is used (`gaslit._openai.detect`, not
-  `gaslit._hosts.detect`), and each fault test asserts the fault was reached.
-- Older versions: `uv run --with "anthropic==X" pytest ...`; add them to the `sdk-compat` job.
-- Add `anthropic` to the `dev` dependency group and its per-chunk numbers to
-  `tests/bench_overhead.py`.
+**Test patterns (both integrations):**
+- Real client against the fake provider with `max_retries=0`: `tests/test_openai*.py`,
+  `tests/test_anthropic*.py`. Each has the matrix, error classes, cancellation, transparency,
+  fault injection and privacy sentinels.
+- Gotchas: cancelled calls are counted but only the first of a series is sampled, so read them
+  from the summaries. Fault injection must patch the name where it is used
+  (`gaslit._anthropic.detect`, not `gaslit._hosts.detect`), and a function that guards itself
+  (like `_take_call`) must be broken from inside. Each fault test asserts the fault was reached.
+- Older versions: `uv run --with "anthropic==X" --with "httpx<0.28" pytest ...`.
 
 ## Loose ends
 

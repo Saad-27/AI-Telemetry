@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Iterator
 from typing import Any
+from unittest.mock import ANY
 
 import pytest
 from fake_provider import Behavior, FakeProvider
@@ -91,6 +92,16 @@ def test_messages_stream(provider: FakeProvider) -> None:
     assert kinds[0] == "message_start"
     assert kinds[-1] == "message_stop"
     assert events(raw)[-2]["usage"]["output_tokens"] == 5
+
+
+def test_messages_stream_error_event_and_cache_counts(provider: FakeProvider) -> None:
+    provider.script(Behavior(stream_error=529, cached_tokens=7))
+    status, _, raw = post(provider, "/v1/messages", stream=True)
+    start, *_, last = events(raw)
+    assert status == 200  # Anthropic reports a mid-stream failure as an event
+    assert start["message"]["usage"]["cache_read_input_tokens"] == 7
+    assert b"event: error\n" in raw
+    assert last == {"type": "error", "error": {"type": "overloaded_error", "message": ANY}}
 
 
 @pytest.mark.parametrize(

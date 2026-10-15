@@ -37,7 +37,7 @@ def init(
     Idempotent and never raises. Without a key it warns once and does nothing,
     unless ``debug=True``, which prints payloads locally instead of sending them.
 
-    ``instrument`` names the libraries to measure automatically, for example ``["openai"]``.
+    ``instrument`` names the libraries to measure automatically: ``"openai"``, ``"anthropic"``.
     The default is every supported library that is installed; ``[]`` measures none.
     """
     try:

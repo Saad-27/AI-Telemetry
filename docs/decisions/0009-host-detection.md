@@ -29,9 +29,9 @@ could leak a name (P1, P6). The rules are in `sdk/python/src/gaslit/_hosts.py`.
   `*.localhost`. A public IP address is `custom`. A bare name like `vllm` is `custom`.
 
 ## Trade-offs
-- Not listed, so `custom`: Azure Government and China (`*.azure.us`, `*.azure.cn`), Bedrock
-  VPC endpoints, and the Vertex multi-region `*.rep.googleapis.com` hosts, which Google's docs
-  did not confirm. Adding one is a one-line change and a new case in `tests/test_hosts.py`.
+- Not listed, so `custom`: Azure Government and China (`*.azure.us`, `*.azure.cn`) and Bedrock
+  VPC endpoints. Adding one is a one-line change and a new case in `tests/test_hosts.py`. (The
+  Vertex multi-region `aiplatform.us|eu.rep.googleapis.com` hosts were added in ADR 0011.)
 - The Bedrock vendor list and the Vertex families will need new names as models appear. A new
   vendor shows up as `custom` or `google` until someone adds it.
 - The server must repeat these checks on ingest (brief §6.6) at M3. That is not built yet.

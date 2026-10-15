@@ -54,6 +54,7 @@ _AWS_REGION = r"[a-z]{2}(?:-[a-z]+)+-\d{1,2}"  # us-east-1, us-gov-west-1
 _GCP_REGION = r"[a-z]+(?:-[a-z]+)+\d{1,2}"  # us-central1, europe-west4
 _BEDROCK = re.compile(rf"bedrock-runtime(?:-fips)?\.({_AWS_REGION})\.amazonaws\.com").fullmatch
 _VERTEX = re.compile(rf"({_GCP_REGION})-aiplatform\.googleapis\.com").fullmatch
+_VERTEX_MULTI = re.compile(r"aiplatform\.(us|eu)\.rep\.googleapis\.com").fullmatch  # "us", "eu"
 
 # Bedrock model IDs start with the vendor ("anthropic.claude-..."), after an optional
 # cross-Region prefix ("us.anthropic.claude-...") or ARN path.
@@ -82,7 +83,7 @@ def _by_host(host: str) -> Endpoint:
         return Endpoint("custom", "bedrock", host, m.group(1))
     if host == "aiplatform.googleapis.com":
         return Endpoint("google", "vertex", host, "global")
-    if m := _VERTEX(host):
+    if m := _VERTEX(host) or _VERTEX_MULTI(host):
         return Endpoint("google", "vertex", host, m.group(1))
     if host == "localhost" or host.endswith(_LOCAL_SUFFIXES):
         return LOCAL

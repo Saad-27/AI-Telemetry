@@ -38,15 +38,21 @@ jobs:
       - name: Overhead benchmark (brief §6.8)
         run: uv run python tests/bench_overhead.py
 
-  # The OpenAI integration against older openai releases (brief §6.9). The latest is already
-  # covered by the sdk job, which uses the locked version.
+  # The integrations against older openai and anthropic releases (brief §6.9). The latest is
+  # already covered by the sdk job, which uses the locked versions.
   sdk-compat:
-    name: sdk (openai ${{ matrix.openai }})
+    name: sdk (${{ matrix.lib }} ${{ matrix.version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        openai: ["1.30.0", "1.66.0", "2.0.0"]
+        include:
+          - { lib: openai, version: "1.30.0" }
+          - { lib: openai, version: "1.66.0" }
+          - { lib: openai, version: "2.0.0" }
+          - { lib: anthropic, version: "0.28.0" }
+          - { lib: anthropic, version: "0.50.0" }
+          - { lib: anthropic, version: "0.124.0" }
     defaults:
       run:
         working-directory: sdk/python
@@ -58,10 +64,10 @@ jobs:
         with:
           python-version: "3.10"
       - run: uv sync --locked
-      # openai 1.x passes `proxies` to httpx, which httpx 0.28 removed.
+      # openai 1.x and older anthropic versions pass `proxies` to httpx, which httpx 0.28 removed.
       - run: >-
-          uv run --with "openai==${{ matrix.openai }}" --with "httpx<0.28"
-          pytest -q tests/test_openai.py tests/test_openai_privacy.py
+          uv run --with "${{ matrix.lib }}==${{ matrix.version }}" --with "httpx<0.28"
+          pytest -q tests/test_${{ matrix.lib }}.py tests/test_${{ matrix.lib }}_privacy.py
 
   server:
     runs-on: ubuntu-latest

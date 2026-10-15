@@ -1,6 +1,6 @@
 # 0010: OpenAI integration (wrapping, streams, installing)
 
-- **Status:** accepted (the Azure placeholder in point 5 is waiting for Saad)
+- **Status:** accepted
 - **Date:** 2026-10-15
 
 ## Context
@@ -33,7 +33,7 @@ against the `openai` source (latest 3.31.0, which now uses `httpx2`) and run aga
 5. **Azure: `model_requested` is the fixed text `azure-deployment`.** On Azure the `model`
    argument is the customer's own deployment name, which can contain a company or project
    name. The returned model (for example `gpt-4o-2024-08-06`) is still reported when there is a
-   response. *Saad to confirm, or choose to send the deployment name.*
+   response. Saad confirmed this on 2026-10-15 (with ADR 0011 point 6).
 6. **What counts as a call.** Exceptions from the `openai` library are classified by type, status
    and short code. Cancellation (`CancelledError`, `KeyboardInterrupt`) is `cancelled`. Any other
    exception (for example a `TypeError` for a bad argument) never reached the provider and is
@@ -46,6 +46,9 @@ against the `openai` source (latest 3.31.0, which now uses `httpx2`) and run aga
    turns them all off. `GASLIT_ENABLED=false` still means no patching at all.
 9. **Supported versions:** `openai` 1.30 and newer (chat completions; Responses from 1.66),
    Python 3.10+. CI runs the OpenAI tests on 1.30.0, 1.66.0 and 2.0.0, and on the locked latest.
+
+Since ADR 0011, the method wrappers and stream measuring live in `_wrap.py`, shared with the
+Anthropic integration; the behaviour above is unchanged.
 
 ## Trade-offs
 - `_iterator` is private. A library change would reduce stream timings to partial until the
