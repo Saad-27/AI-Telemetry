@@ -13,7 +13,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Server** (`server/`): FastAPI with `/healthz` and `/readyz` only. No tables, no ingest yet.
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M2**, the SDK integrations (below). Step 1 (fake provider) is done.
+- **In progress: M2**, the SDK integrations (below). Steps 1 and 2 are done.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -47,8 +47,10 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    not a repo dependency); `sdk/python/tests/test_fake_provider.py` covers it with plain HTTP.
    Not built yet (add when a test needs it): a stream cut off mid-way, a disconnect counter, Azure/
    Bedrock/Vertex paths. Real clients retry 429/5xx by default, so tests use `max_retries=0`.
-2. **Host and route detection** (brief §6.6): OpenAI, Azure, Bedrock, Vertex and
-   OpenAI-compatible endpoints, by hostname.
+2. **Host and route detection: DONE** (`sdk/python/src/gaslit/_hosts.py`, ADR 0009).
+   `detect(base_url, model)` returns `Endpoint(provider, route, host, region)`; it reads only the
+   hostname and never raises. Not yet called by anything: the integrations (steps 3-4) call it
+   once per client, not per request. Server-side re-validation of the allowlist is M3.
 3. **OpenAI integration**: `chat.completions` and `responses`, sync and async, streaming and not.
 4. **Anthropic integration**: `messages.create` and `messages.stream`, sync and async.
 5. **Examples** (`examples/`) that print what the SDK sends in debug mode.
