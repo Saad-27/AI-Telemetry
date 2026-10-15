@@ -30,7 +30,9 @@ extend = "../../ruff.toml"
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
+mypy_path = "../../tools/fake-provider"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["../../tools/fake-provider"]
 markers = ["sender: run the real background sender thread"]

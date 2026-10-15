@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-15
+**Last updated:** 2026-10-15 (M2 step 1)
 
 ## Where the project is
 
@@ -13,7 +13,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Server** (`server/`): FastAPI with `/healthz` and `/readyz` only. No tables, no ingest yet.
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **Next: M2**, the SDK integrations (below).
+- **In progress: M2**, the SDK integrations (below). Step 1 (fake provider) is done.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -39,8 +39,14 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 
 ## Next: M2 plan (small PRs, in order)
 
-1. **Fake provider server** (`tools/fake-provider/`): simulates latency, slow streams, 429, 529,
-   5xx and timeouts, so tests and demos cost no tokens (brief §9.11).
+1. **Fake provider server: DONE** (`tools/fake-provider/fake_provider.py`, stdlib only). Serves
+   `/v1/chat/completions`, `/v1/responses` and `/v1/messages`, streaming or not. Control it per
+   call with a `Behavior` (`status`, `latency_ms`, `chunk_ms`, `chunks`, `retry_after_s`), the
+   `x-fake-behavior` header, or `FakeProvider.script(...)` in tests. A timeout is a `latency_ms`
+   above the client's timeout. Checked against the real `openai` and `anthropic` clients (ad hoc,
+   not a repo dependency); `sdk/python/tests/test_fake_provider.py` covers it with plain HTTP.
+   Not built yet (add when a test needs it): a stream cut off mid-way, a disconnect counter, Azure/
+   Bedrock/Vertex paths. Real clients retry 429/5xx by default, so tests use `max_retries=0`.
 2. **Host and route detection** (brief §6.6): OpenAI, Azure, Bedrock, Vertex and
    OpenAI-compatible endpoints, by hostname.
 3. **OpenAI integration**: `chat.completions` and `responses`, sync and async, streaming and not.
