@@ -29,8 +29,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | Item | Status |
 |---|---|
 | Domain `gaslit.dev` | Bought on Cloudflare Registrar 2026-10-14. DNSSEC was "pending" (Cloudflare adds the DS record itself) |
-| Email-spoofing records (null MX, SPF `-all`, DMARC reject) | Recommended to Saad; not confirmed done |
-| PyPI name `gaslit` | Claimed: placeholder 0.0.0 uploaded 2026-10-14. Saad was told to delete the account-wide upload token afterwards; not confirmed |
+| Email-spoofing records (null MX, SPF `-all`, DMARC reject) | Done |
+| PyPI name `gaslit` | Claimed: placeholder 0.0.0 uploaded 2026-10-14. The upload token was deleted |
 | GitHub branch protection on `main` | Done |
 | GitHub secret scanning | Saad chose not to enable it |
 | Repo visibility | **Public**, which keeps environment approval gates free (ADR 0006). D5 said private; Saad has not changed it |
