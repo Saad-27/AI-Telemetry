@@ -83,6 +83,16 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    2. Measured row sizes: 639 B per summary, 356 B per sample, with indexes. **Still open:**
    Saad's monthly database budget, and a re-check of the numbers after the step 7 load test.
    The per-IP limit on invalid keys moved to step 8 (needs a trusted client IP).
+   **Known cost issue, fix proposed (not built; Saad merged #32 first, 2026-10-17):** a blocked
+   account's SDK checks back every 60 s, and the key cache lasts 60 s, so almost every check runs
+   the key lookup (a DB write). If blocked accounts are the only traffic, Neon never sleeps
+   (~$19.35/month paid; on Neon Free the 100 CU-hours run out in ~17 days, then the DB stops for
+   everyone). Proposed: (1) answer blocked accounts from memory until the month ends, no DB;
+   keep the 60 s check, which keeps the cheap Fly machine (~$2/month) awake so its memory and
+   the block survive; (2) the key lookup also returns this month's usage, so a restarted
+   machine blocks at once; (3) an `unblock(account)` hook in ingest, called by the upgrade flow
+   (M4/paid tier), not via the DB (a listening connection keeps Neon awake). It can also make
+   revocation instant. Ask Saad before building it.
    **SDK error-sample cap: IN REVIEW, PR #33** (ADR 0018): the first 3 errors of each class per
    minute per process, instead of up to 100 a minute; the rest are only counted. Keeps an
    incident's traffic under the rate limit. Merges cleanly with #32.
