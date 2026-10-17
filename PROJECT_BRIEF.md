@@ -1187,7 +1187,7 @@ Both must be protected. The checklist in 11.11 must be fully ticked before publi
 
 **Maintenance**
 
-- **Patching:** dependency updates weekly, with a target of patching critical CVEs within 72 hours.
+- **Patching:** Dependabot security updates as advisories appear, with a target of patching critical CVEs within 72 hours. Routine upgrades by hand at the start of each milestone ([ADR 0014](docs/decisions/0014-security-only-dependency-updates.md)).
 - **Backups:** automated and encrypted. Test a restore before launch, then quarterly.
 
 ### 11.9 Privacy, compliance and legal

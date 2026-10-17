@@ -1,14 +1,22 @@
+# Security fixes only (ADR 0014). open-pull-requests-limit: 0 turns off routine version bumps;
+# Dependabot security updates (enabled in the repo settings) still open a PR as soon as an
+# advisory affects a dependency, using the ecosystems and directories listed here.
+# Routine upgrades are done deliberately, at the start of each milestone.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    open-pull-requests-limit: 0
   - package-ecosystem: uv
     directories: [/sdk/python, /server]
     schedule: { interval: weekly }
+    open-pull-requests-limit: 0
   - package-ecosystem: docker
     directory: /server
     schedule: { interval: weekly }
+    open-pull-requests-limit: 0
   - package-ecosystem: terraform
     directory: /infra/terraform
     schedule: { interval: weekly }
+    open-pull-requests-limit: 0

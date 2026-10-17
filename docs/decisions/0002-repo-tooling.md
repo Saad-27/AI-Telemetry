@@ -24,7 +24,7 @@ Option 2.
   `make test` uses the compose database unless `DATABASE_URL` is already set.
 - **GitHub Actions** with `contents: read`, actions pinned to commit SHAs and
   `persist-credentials: false`. Dependabot bumps actions, uv locks and base images weekly
-  (§11.8). Jobs: SDK on Python 3.10-3.13, server against a Postgres service, Docker build.
+  (§11.8; security fixes only since ADR 0014). Jobs: SDK on Python 3.10-3.13, server against a Postgres service, Docker build.
 - Server image: multi-stage on `python:3.12-slim`, dependencies from the lockfile, non-root user.
 - The SDK uses hatchling as a build-time-only backend. Runtime dependencies stay at zero,
   and a test enforces it.
