@@ -42,6 +42,7 @@ installed for years, so these rules must be fixed before the first release. Item
 
 **Samples** (checked in this order, under the aggregator's lock)
 1. Errors: always, up to 100 per process per minute. Errors over the cap are only counted.
+   *Changed by [ADR 0018](0018-error-samples-per-class.md): the first 3 of each error class.*
 2. First call of each series in the process lifetime. The set of seen series is capped at 500;
    once it's full, no more `first_of_series` samples are sent. An erroring first call is sent as
    `error` and still marks the series as seen.

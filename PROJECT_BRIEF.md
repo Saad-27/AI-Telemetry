@@ -563,7 +563,7 @@ These are targets. Measure and publish the real numbers, which are also good int
    - p50/p95 TTFT and p50/p95 duration
    - decode rate
    - a sparkline, a health badge and a vs-everyone indicator
-7. **Live feed** of recent calls, refreshing automatically: every error plus a labelled sample of successful calls (metadata only, Section 19).
+7. **Live feed** of recent calls, refreshing automatically: errors (the first 3 of each type per minute per app process; totals are exact) plus a labelled sample of successful calls (metadata only, Section 19).
 8. **Model detail page:** TTFT, duration, decode rate and error rate by class over 1 h, 24 h and 7 d, split by input bucket. Official incidents are shaded and the global baseline is overlaid.
 9. **Health badges**, display only with no notifications. Rules in 7.3.
 10. **"Whose side?" hints** for each error class (Section 6.5).
@@ -828,7 +828,7 @@ Adding arrays together gives exact bucket counts for any time range or group of 
 
 - **MVP:** the client polls `GET /feed?after=<cursor>` every 3-5 s. This is simple and robust.
 - **Later:** Server-Sent Events fed by Redis pub/sub from the ingest service.
-- **Source:** `call_samples`, so the feed shows every error plus a labelled sample of successful calls, not every call.
+- **Source:** `call_samples`, so the feed shows the first errors of each type plus a labelled sample of successful calls, not every call.
 - **Columns:** time, service, model, route, streaming, input tokens, output tokens, TTFT, duration, status or error class.
 
 ### 9.8 Hosting and deployment
@@ -1632,7 +1632,7 @@ This section defines the **wire format**, meaning what the SDK sends. It must be
 
 | Rule | Detail |
 |---|---|
-| Always send errors | Capped at 100 per minute per process. Errors beyond the cap are only counted in the summary |
+| Send errors | The first 3 of each error class per minute per process ([ADR 0018](docs/decisions/0018-error-samples-per-class.md)). Errors beyond the cap are only counted in the summary |
 | Always send the first call of each new series per process | Lets onboarding confirm the setup within seconds, and makes new models appear immediately |
 | Random successful calls | `sample_rate` (default 0.05, i.e. 1 in 20), capped by `max_samples_per_minute` (default 10 per process) |
 
@@ -1678,7 +1678,7 @@ This section defines the **wire format**, meaning what the SDK sends. It must be
 
 ### 19.6 Trade-offs (be honest about them in the docs)
 
-- **The live feed is sampled.** It shows every error (up to the cap) but only a sample of successful calls. Label it clearly.
+- **The live feed is sampled.** It shows the first 3 errors of each type per minute per process and a sample of successful calls. Error rates and charts use the summaries, which count every call. Label it clearly.
 - **Percentiles are approximate.** They are interpolated within histogram buckets, so error is bounded by bucket width. Document the boundaries.
 - **Charts lag by about 1-2 minutes,** because summaries flush once a minute. The live feed lags by about 5 seconds.
 - **Raw per-call history is not kept** beyond the samples. That is less to store, and a privacy plus.
@@ -1875,7 +1875,7 @@ Track monthly:
 | **Input bucket** | Input-size group (`xs` < 1k, `s` 1k-10k, `l` ≥ 10k tokens) used for fair comparison |
 | **Rollup** | Server-side per-minute (or coarser) totals, built by adding up summary records |
 | **Summary record** | One SDK process's tally for one series over one minute: counts, error counts, histograms, token sums |
-| **Sample record** | One individual call sent in full (metadata only): every error, the first call of each series and a small random share |
+| **Sample record** | One individual call sent in full (metadata only): the first errors of each type, the first call of each series and a small random share |
 | **Series** | One combination of provider, route, model, streaming, input bucket, service, environment and origin region |
 | **Cardinality guard** | Cap on how many distinct series one process tracks, so memory and storage cannot blow up |
 | **Mergeable histogram** | Fixed-bucket counts that can be summed across time and projects to compute percentiles |
