@@ -2,7 +2,7 @@ SDK    := sdk/python
 SERVER := server
 PKGS   := $(SDK) $(SERVER)
 
-.PHONY: dev down db migrate test lint fmt bench
+.PHONY: dev down db migrate dev-key test lint fmt bench
 
 dev:  ## Postgres + server (with reload) on 127.0.0.1:8000
 	docker compose up --build
@@ -17,6 +17,10 @@ db:
 # Schema to the latest migration, then this week's partitions (both as the schema owner).
 migrate: db
 	cd $(SERVER) && uv run alembic upgrade head && uv run python -m app.db.partitions
+
+# A new ingest key for the local server (dev user and project made on first use).
+dev-key: migrate
+	cd $(SERVER) && uv run python -m app.db.dev_key
 
 test: db
 	@for d in $(PKGS); do echo "== test $$d"; (cd $$d && uv run pytest -q) || exit 1; done

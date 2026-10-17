@@ -53,13 +53,13 @@ How to apply a setting is in [deploy.md](deploy.md).
 
 | Requirement | Why | Status |
 |---|---|---|
-| Never log request bodies, keys, `Authorization` headers or driver error text. Log the exception type only, as `/readyz` does | Postgres errors can quote row values (for example a duplicate key hash) | Step 3, with a test on captured log output (§11.11) |
-| No CORS headers on ingest | Keys belong on servers, never in browser code | Step 3 |
-| Size caps before reading the body; gunzip streamed with a 5 MB cap | Stops memory exhaustion and zip bombs | Step 3 |
-| Pydantic with `extra="forbid"`, strict enums and regexes | Content-like or oversized strings can never be stored (P1), and stored XSS is blocked at the door | Step 3 |
-| Error responses carry a reason code, never input or a stack trace | Responses must not echo what was sent | Step 3 |
+| Never log request bodies, keys, `Authorization` headers or driver error text. Log the exception type only, as `/readyz` does | Postgres errors can quote row values (for example a duplicate key hash) | **Done** (`app/ingest/routes.py`), tested on captured logs with sentinels in keys, bodies and exception messages; checked in the dev server's logs |
+| No CORS headers on ingest | Keys belong on servers, never in browser code | **Done**, tested (preflight gets 405, no `Access-Control-*`) |
+| Size caps before reading the body; gunzip streamed with a 5 MB cap | Stops memory exhaustion and zip bombs | **Done**, tested (chunked uploads, a 5 MB bomb of 5 KB) |
+| Pydantic with `extra="forbid"`, strict enums and regexes; `endpoint_host` re-checked against the SDK's allowlist | Content-like or oversized strings can never be stored (P1), customers' hostnames never (P6), and stored XSS is blocked at the door | **Done** (`app/ingest/schema.py`, ADR 0016), tested |
+| Error responses carry a reason code, never input or a stack trace | Responses must not echo what was sent | **Done**: field names and error types only, never unknown keys or values, tested |
 | Only the SHA-256 of a key is stored; key cache at most 60 s | A database leak does not leak usable keys; revocation takes effect within a minute | **Done** (`app/ingest/keys.py`, ADR 0015), tested |
-| Key format and checksum checked before any database work; database errors never cached as "bad key" | Garbage keys cost no query; an outage returns 503, not a 401 that stops users' SDKs | **Done**, tested; the 401/503 mapping is step 3 |
+| Key format and checksum checked before any database work; database errors never cached as "bad key" | Garbage keys cost no query; an outage returns 503, not a 401 that stops users' SDKs | **Done**, tested |
 | Parameterised SQL only (identifiers built from constants, as in `app.db.partitions`) | SQL injection | Every step |
 
 ## 6. Dashboard (M4)

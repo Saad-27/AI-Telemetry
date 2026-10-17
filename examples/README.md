@@ -41,4 +41,15 @@ hostname, so the events match what a real call would produce. In your own app, n
 is needed: call `gaslit.init()` once at startup, and `gaslit.flush()` before a short script
 exits.
 
+## Send to the local server
+
+With `make dev` running, `make dev-key` prints a key. Then, from `sdk/python`:
+
+```bash
+GASLIT_ENDPOINT=http://127.0.0.1:8000 GASLIT_KEY=gl_live_... \
+  uv run python ../../examples/openai_chat.py
+```
+
+The payloads are still printed, and now also stored in the local database.
+
 `sdk/python/tests/test_examples.py` runs every example and checks its payload.
