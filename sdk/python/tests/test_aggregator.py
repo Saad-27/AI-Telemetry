@@ -38,10 +38,8 @@ def call(**kw: object) -> Call:
     return Call(**(base | kw))  # type: ignore[arg-type]
 
 
-def agg(
-    rate: float = 0.0, cap: int = 10, max_series: int = 500, max_error_samples: int = 100
-) -> Aggregator:
-    return Aggregator(rate, cap, FixedRng(0.0), max_series, max_error_samples)
+def agg(rate: float = 0.0, cap: int = 10, max_series: int = 500, max_errors: int = 3) -> Aggregator:
+    return Aggregator(rate, cap, FixedRng(0.0), max_series, max_errors)
 
 
 def test_summary_tallies_and_histogram_membership() -> None:
@@ -110,13 +108,24 @@ def test_first_call_that_errors_is_sent_as_error_and_marks_series_seen() -> None
     assert a.add(call()) is None
 
 
-def test_error_samples_capped_per_minute() -> None:
-    a = agg(max_error_samples=2)
-    err: dict[str, object] = {"status": "error", "error_class": "server_error"}
-    assert [a.add(call(**err)) for _ in range(3)] == ["error", "error", None]
+def test_error_samples_capped_per_class_per_minute() -> None:
+    a = agg()
+    err: dict[str, object] = {"status": "error", "error_class": "rate_limited"}
+    assert [a.add(call(**err)) for _ in range(5)] == ["error"] * 3 + [None] * 2
+    # Each kind of error is still seen, even during a flood of another kind.
+    assert a.add(call(status="error", error_class="overloaded")) == "error"
+    assert a.add(call(status="error")) == "error"  # no class: "unknown"
     assert a.add(call(ts_ms=MINUTE + 60_000, **err)) == "error"
     [s0, _] = sorted(a.pop_all(), key=lambda s: s.minute)
-    assert s0.errors == {"server_error": 3}  # capped samples are still counted
+    assert s0.errors == {"rate_limited": 5, "overloaded": 1, "unknown": 1}  # all counted
+
+
+def test_capped_error_leaves_the_series_first_sample_for_later() -> None:
+    a = agg(max_errors=1)
+    err: dict[str, object] = {"status": "error", "error_class": "server_error"}
+    assert a.add(call(**err)) == "error"
+    assert a.add(call(model_requested="new", **err)) is None  # capped
+    assert a.add(call(model_requested="new")) == "first_of_series"  # back to normal
 
 
 def test_random_samples_respect_rate_and_cap() -> None:

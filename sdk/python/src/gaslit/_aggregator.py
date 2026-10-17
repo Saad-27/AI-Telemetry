@@ -27,7 +27,9 @@ from ._model import (
 SeriesKey = tuple[str, str, str | None, str | None, str, str, bool, str]
 
 MAX_SERIES = 500
-MAX_ERROR_SAMPLES = 100
+# Per error class, per minute, per process (ADR 0018). Every error is still counted in the
+# summary; during an incident the samples beyond the first few are near-identical copies.
+MAX_ERROR_SAMPLES_PER_CLASS = 3
 OTHER_MODEL = "other"
 
 
@@ -135,11 +137,11 @@ class Aggregator:
         max_samples_per_minute: int,
         rng: random.Random | None = None,
         max_series: int = MAX_SERIES,
-        max_error_samples: int = MAX_ERROR_SAMPLES,
+        max_error_samples_per_class: int = MAX_ERROR_SAMPLES_PER_CLASS,
     ) -> None:
         self._sample_rate = sample_rate
         self._max_random = max_samples_per_minute
-        self._max_errors = max_error_samples
+        self._max_errors = max_error_samples_per_class
         self._max_series = max_series
         self._rng = rng or random.Random()  # noqa: S311 (sampling, not security)
         self._lock = threading.Lock()
@@ -147,7 +149,7 @@ class Aggregator:
         # Series already seen by this process, for first_of_series. Capped like the guard.
         self._seen: set[SeriesKey] = set()
         self._sample_minute = 0
-        self._error_samples = 0
+        self._error_samples: dict[str, int] = {}  # error class -> samples this minute
         self._random_samples = 0
         self.folded = 0  # calls folded into model="other" by the cardinality guard
 
@@ -184,16 +186,20 @@ class Aggregator:
     def _sample_reason(self, minute: int, key: SeriesKey, call: Call) -> str | None:
         if minute > self._sample_minute:
             self._sample_minute = minute
-            self._error_samples = self._random_samples = 0
+            self._error_samples = {}
+            self._random_samples = 0
         first = key not in self._seen and len(self._seen) < self._max_series
+        if call.status == ERROR:
+            cls = call.error_class or "unknown"
+            sent = self._error_samples.get(cls, 0)
+            if sent >= self._max_errors:
+                return None  # counted only; the series' first sample is still to come
+            self._error_samples[cls] = sent + 1
+            if first:
+                self._seen.add(key)
+            return "error"
         if first:
             self._seen.add(key)
-        if call.status == ERROR:
-            if self._error_samples < self._max_errors:
-                self._error_samples += 1
-                return "error"
-            return None
-        if first:
             return "first_of_series"
         if (
             call.status == OK
