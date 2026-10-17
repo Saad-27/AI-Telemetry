@@ -70,8 +70,14 @@ Turn it on for GitHub, Fly.io, Cloudflare, PyPI and your email before creating a
 project named `gaslit` on the Free plan, region **AWS Europe Central 1 (Frankfurt)**, Postgres 17.
 Copy the **direct** connection string (not the pooled one; the app keeps its own small pool).
 
-Remove `&channel_binding=require` from it and keep `sslmode=require`. asyncpg passes query
-parameters it does not know to Postgres as settings, and Postgres rejects `channel_binding`.
+Edit its query string before storing it:
+
+- Remove `&channel_binding=require`. asyncpg passes query parameters it does not know to
+  Postgres as settings, and Postgres rejects `channel_binding`.
+- Change `sslmode=require` to `sslmode=verify-full`. With `require`, asyncpg encrypts but accepts
+  any certificate, so anyone on the network path could read the password. `verify-full` checks
+  Neon's certificate against the CA bundle in the image (`PGSSLROOTCERT`). The server refuses to
+  start on Fly without it ([security-config.md](security-config.md)).
 
 **Fly:** install `flyctl` and run `fly auth login`, then:
 
@@ -200,7 +206,7 @@ the TypeScript SDK starts.
 
 | Where | Name | What |
 |---|---|---|
-| Fly app secret | `DATABASE_URL` | Neon direct connection string, without `channel_binding` (step 2) |
+| Fly app secret | `DATABASE_URL` | Neon direct connection string, `sslmode=verify-full`, without `channel_binding` (step 2) |
 | Fly app secret | OAuth client IDs and secrets, session key | M4 |
 | GitHub `production` env | `FLY_API_TOKEN`, var `PUBLIC_URL` | Deploy token, smoke-test URL |
 | GitHub repo secrets | `CLOUDFLARE_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Terraform |

@@ -14,6 +14,8 @@ RUN useradd --system --uid 10001 --no-create-home app
 WORKDIR /srv
 COPY --from=build /srv /srv
 ENV PATH=/srv/.venv/bin:$PATH PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+# CA bundle for sslmode=verify-full: asyncpg does not fall back to the system store on its own.
+ENV PGSSLROOTCERT=/etc/ssl/certs/ca-certificates.crt
 USER app
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
