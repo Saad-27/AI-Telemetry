@@ -8,12 +8,17 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import Settings, load_settings
 from app.db import DB_TIMEOUT_S
+from app.ingest.keys import KeyStore
+from app.ingest.routes import router as ingest_router
+from app.ingest.sink import PostgresSink
 
 log = logging.getLogger(__name__)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
+    # Uvicorn configures only its own loggers; this shows the app's INFO lines too.
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -21,12 +26,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.pool = await asyncpg.create_pool(
             settings.database_url, min_size=0, max_size=5, timeout=DB_TIMEOUT_S
         )
+        app.state.keys = KeyStore(app.state.pool)
+        app.state.sink = PostgresSink(app.state.pool)
         try:
             yield
         finally:
             await app.state.pool.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.include_router(ingest_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
