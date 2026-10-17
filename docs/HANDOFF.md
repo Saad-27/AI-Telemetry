@@ -125,6 +125,10 @@ source, not memory, before relying on it (brief §17).
 
 ## Loose ends
 
+- **Security config:** `docs/security-config.md` (PR #28) lists every setting that keeps users'
+  data safe, with status. Check it at each step. Open gap for step 8: requests to
+  `*.fly.dev` skip Cloudflare; proposed fix is a secret header added by Cloudflare.
+
 - `sdk/python/src/gaslit/_config.py`: `DEFAULT_ENDPOINT` is still `https://ingest.gaslit.invalid`
   with a stale "until the name is chosen" comment. Change it to `https://ingest.gaslit.dev`
   before the first real release (0.1.0, M7).
