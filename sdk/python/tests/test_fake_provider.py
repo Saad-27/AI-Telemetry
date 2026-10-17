@@ -64,7 +64,7 @@ def test_non_streaming_reports_usage(provider: FakeProvider, path: str) -> None:
     usage = json.loads(raw)["usage"]
     assert status == 200
     assert 5 in usage.values()  # output tokens
-    assert provider.calls[0].model == "m"
+    assert provider.wait_for(1)[0].model == "m"  # recorded just after the reply is sent
 
 
 def test_chat_stream_ends_with_usage_and_done_only_when_asked(provider: FakeProvider) -> None:

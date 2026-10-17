@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings, load_settings
@@ -11,6 +12,7 @@ def test_healthz() -> None:
     assert resp.json() == {"status": "ok"}
 
 
+@pytest.mark.db
 def test_readyz_with_database() -> None:
     # Needs Postgres from `make test` (compose) or the CI service container.
     with TestClient(create_app(load_settings())) as client:
