@@ -104,7 +104,7 @@ class Clock:
 
 
 def found() -> dict[str, Any]:
-    return {"id": uuid.uuid4(), "project_id": uuid.uuid4()}
+    return {"id": uuid.uuid4(), "project_id": uuid.uuid4(), "user_id": uuid.uuid4(), "plan": "free"}
 
 
 @pytest.fixture
@@ -128,7 +128,7 @@ async def test_malformed_key_never_reaches_the_database(pool: FakePool) -> None:
 async def test_found_key_is_cached_until_expiry(pool: FakePool, clock: Clock) -> None:
     store = KeyStore(pool, ttl_s=60, clock=clock)
     row = pool.rows[KEY.key_hash]
-    expected = IngestKey(row["id"], row["project_id"])
+    expected = IngestKey(**row)
     assert await store.resolve(KEY.key) == expected
     del pool.rows[KEY.key_hash]  # revoked
     clock.now += 59.9

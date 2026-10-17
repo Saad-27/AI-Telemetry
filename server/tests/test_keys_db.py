@@ -46,7 +46,7 @@ async def add_key(owner: asyncpg.Connection) -> tuple[NewKey, IngestKey]:
         new.last4,
         user,
     )
-    return new, IngestKey(key_id, project)
+    return new, IngestKey(key_id, project, user, "free")
 
 
 async def test_resolves_and_marks_used(
@@ -73,3 +73,24 @@ async def test_revocation_takes_effect_when_the_cache_expires(
     assert await store.resolve(new.key) == expected  # cached
     now[0] = 60.0
     assert await store.resolve(new.key) is None
+
+
+async def test_keys_of_deleted_projects_are_refused(
+    owner: asyncpg.Connection, ingest_pool: asyncpg.Pool
+) -> None:
+    new, expected = await add_key(owner)
+    await owner.execute("UPDATE projects SET deleted_at = now() WHERE id = $1", expected.project_id)
+    assert await KeyStore(ingest_pool).resolve(new.key) is None
+
+
+async def test_plan_changes_apply_when_the_cache_expires(
+    owner: asyncpg.Connection, ingest_pool: asyncpg.Pool
+) -> None:
+    now = [0.0]
+    store = KeyStore(ingest_pool, ttl_s=60, clock=lambda: now[0])
+    new, expected = await add_key(owner)
+    assert await store.resolve(new.key) == expected
+    await owner.execute("UPDATE users SET plan = 'pro' WHERE id = $1", expected.user_id)
+    now[0] = 60.0
+    found = await store.resolve(new.key)
+    assert found is not None and found.plan == "pro"

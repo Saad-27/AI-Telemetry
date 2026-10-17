@@ -1,12 +1,14 @@
 """POST /v1/ingest without a database: limits, auth, parsing, responses and logs (brief §9.2,
 §11.5). The real inserts are in test_ingest_db.py."""
 
+import dataclasses
 import gzip
 import json
 import logging
 import uuid
 import zlib
 from collections.abc import Iterator, Sequence
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -15,14 +17,19 @@ from httpx2 import Response
 from records import envelope, gzipped, sample, summary
 
 from app.core.config import Settings
+from app.core.entitlements import FREE
 from app.ingest.keys import IngestKey, generate
+from app.ingest.limits import Quota, RateLimiter
 from app.ingest.routes import MAX_BODY, MAX_DECOMPRESSED, MAX_RECORDS
 from app.ingest.schema import Sample, Summary
 from app.main import create_app
 
 KEY = generate()
-PROJECT = uuid.uuid4()
+FOUND = IngestKey(uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), "free")
+PROJECT = FOUND.project_id
 SENTINEL = "SENTINEL-secret-text"
+# The last minute of October, UTC: quotas reset 60 s later.
+OCT_END = datetime(2026, 10, 31, 23, 59, tzinfo=UTC).timestamp()
 
 
 class FakeKeys:
@@ -32,7 +39,7 @@ class FakeKeys:
     async def resolve(self, key: str) -> IngestKey | None:
         if self.error:
             raise self.error
-        return IngestKey(uuid.uuid4(), PROJECT) if key == KEY.key else None
+        return FOUND if key == KEY.key else None
 
 
 class RecordingSink:
@@ -48,13 +55,41 @@ class RecordingSink:
         self.writes.append((project_id, list(summaries), list(samples)))
 
 
+class Clock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
 @pytest.fixture
-def client() -> Iterator[TestClient]:
+def clock() -> Clock:
+    """Wall time, for the quota."""
+    return Clock(OCT_END)
+
+
+@pytest.fixture
+def ticks() -> Clock:
+    """Monotonic time, for the rate limit."""
+    return Clock(0.0)
+
+
+@pytest.fixture
+def client(clock: Clock, ticks: Clock) -> Iterator[TestClient]:
     app = create_app(Settings(database_url="postgresql://nobody:x@127.0.0.1:1/none"))
     with TestClient(app) as client:
         app.state.keys = FakeKeys()
         app.state.sink = RecordingSink()
+        app.state.rate = RateLimiter(clock=ticks)
+        # Never flushed: the lifespan flushes the quota it made, which stays empty.
+        app.state.quota = Quota(app.state.pool, clock=clock)
         yield client
+
+
+def limit(monkeypatch: pytest.MonkeyPatch, **changes: Any) -> None:
+    tiny = dataclasses.replace(FREE, **changes)
+    monkeypatch.setattr("app.ingest.routes.entitlements", lambda plan: tiny)
 
 
 def keys(client: TestClient) -> FakeKeys:
@@ -206,6 +241,61 @@ def test_no_cors(client: TestClient) -> None:
     )
     assert preflight.status_code == 405
     assert "access-control-allow-origin" not in preflight.headers
+
+
+def test_over_quota_gets_429_until_the_month_ends(
+    client: TestClient, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limit(monkeypatch, monthly_calls=200)
+    assert post(client, envelope([summary()])).status_code == 202  # 120 calls
+    assert post(client, envelope([summary()], [sample()])).status_code == 202  # 240: now over
+    resp = post(client, envelope(samples=[sample()]))
+    assert (resp.status_code, resp.json()) == (429, {"error": "quota_exceeded"})
+    assert resp.headers["Retry-After"] == "60"
+    assert len(sink(client).writes) == 2
+    clock.now += 60  # November
+    assert post(client, envelope([summary()])).status_code == 202
+
+
+def test_quota_counts_calls_only_once_stored(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limit(monkeypatch, monthly_calls=1)
+    sink(client).error = ConnectionResetError()
+    assert post(client, envelope([summary()])).status_code == 503
+    sink(client).error = None
+    assert post(client, envelope(samples=[sample()])).status_code == 202  # samples: no calls
+    assert post(client, envelope([summary()])).status_code == 202
+    assert post(client, envelope([summary()])).status_code == 429
+
+
+def test_rate_limit_counts_records(
+    client: TestClient, ticks: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limit(monkeypatch, records_per_s=10, records_burst=5)
+    # One token per request, then one per record: this leaves the bucket at 5 - 1 - 4 = 0.
+    assert post(client, envelope([summary()], [sample()] * 3)).status_code == 202
+    resp = post(client, envelope())
+    assert (resp.status_code, resp.json()) == (429, {"error": "rate_limited"})
+    assert resp.headers["Retry-After"] == "1"  # 0.1 s, rounded up
+    ticks.now += 0.1
+    assert post(client, envelope()).status_code == 202
+    # A batch bigger than the burst is let in once, then the key waits off the debt.
+    ticks.now += 1
+    assert post(client, envelope(samples=[sample()] * 30)).status_code == 202
+    assert post(client, envelope()).headers["Retry-After"] == "3"  # 26 records owed at 10/s
+    # Rejected requests are free, and malformed ones cost their one token.
+    ticks.now += 2.7
+    assert post(client, b"{").status_code == 400
+    assert post(client, envelope()).status_code == 429
+
+
+def test_quota_is_checked_before_the_rate_limit(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    limit(monkeypatch, monthly_calls=1, records_burst=2)
+    assert post(client, envelope([summary()])).status_code == 202
+    assert post(client, envelope()).json() == {"error": "quota_exceeded"}
 
 
 def test_logs_and_responses_never_hold_keys_or_content(

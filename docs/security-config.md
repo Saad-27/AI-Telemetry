@@ -26,8 +26,8 @@ How to apply a setting is in [deploy.md](deploy.md).
 |---|---|---|
 | RLS on `summary_records` and `call_samples`; dashboard queries run in a transaction with `SET LOCAL app.project_id` | A missed `WHERE project_id = ...` cannot return another tenant's rows | **Done** in the schema (ADR 0013); takes effect with the roles above |
 | Grants only on the partitioned parents, never on partitions | RLS applies through the parent only. Direct access to a partition would skip it | **Done** |
-| `ingest_writer` cannot read data, users or key prefixes | A leaked or buggy ingest process cannot be used to read tenants' data | **Done**, tested |
-| Soft-deleting a project revokes its keys in the same transaction | `ingest_writer` cannot read `projects`, so a deleted project's keys would keep writing (ADR 0015) | M4 |
+| `ingest_writer` cannot read data, users' details or key prefixes. It reads only `projects (id, owner_user_id, deleted_at)`, `users (id, plan)` and `monthly_usage` | A leaked or buggy ingest process cannot be used to read tenants' data | **Done**, tested (ADR 0017) |
+| Soft-deleting a project revokes its keys in the same transaction | Keeps the key list honest. Ingest also refuses keys of deleted projects, within 60 s (ADR 0017) | M4 |
 | Every dashboard route goes through `require_project_member`; unknown and foreign projects both return 404; IDOR suite generated from the route table | Stops one user reading another's project by guessing IDs | M4 |
 
 ## 3. Hosting (Fly)
@@ -35,7 +35,7 @@ How to apply a setting is in [deploy.md](deploy.md).
 | Requirement | Why | Status |
 |---|---|---|
 | **Requests that skip Cloudflare are rejected** | `gaslit-api-production.fly.dev` reaches the app directly, around Cloudflare's firewall, ingest path filter and rate limit. Proposed fix: a Cloudflare request-header rule adds a secret header, the app rejects requests without it, and the deploy smoke test goes through `PUBLIC_URL` | **Gap**: decide at step 8 |
-| The app reads the client IP only from a header it can trust (`CF-Connecting-IP`, once the gap above is closed) | Otherwise per-IP limits on invalid keys can be dodged by forging the header | Steps 3-4 |
+| The app reads the client IP only from a header it can trust (`CF-Connecting-IP`, once the gap above is closed) | Otherwise per-IP limits on invalid keys can be dodged by forging the header | Step 8, with the gap above; the per-IP limit on invalid keys waits for it (ADR 0017) |
 | Secrets only through `fly secrets set`, never in `production.toml` | The repo is public | **Done** (the file has none) |
 | Non-root container, no dev dependencies in the image | Limits damage from a compromised process | **Done** (`uid 10001`, `uv sync --no-dev`) |
 | Logs may hold client IPs (personal data, GDPR); keep retention short and list Fly, Neon and Cloudflare as sub-processors | Privacy policy accuracy | M7 |
@@ -60,6 +60,7 @@ How to apply a setting is in [deploy.md](deploy.md).
 | Error responses carry a reason code, never input or a stack trace | Responses must not echo what was sent | **Done**: field names and error types only, never unknown keys or values, tested |
 | Only the SHA-256 of a key is stored; key cache at most 60 s | A database leak does not leak usable keys; revocation takes effect within a minute | **Done** (`app/ingest/keys.py`, ADR 0015), tested |
 | Key format and checksum checked before any database work; database errors never cached as "bad key" | Garbage keys cost no query; an outage returns 503, not a 401 that stops users' SDKs | **Done**, tested |
+| Per-key rate limit (records/s) and per-account monthly quota, both from `entitlements()`; `429` with `Retry-After` | A leaked key or a runaway app cannot flood the database or other accounts | **Done** (`app/ingest/limits.py`, ADR 0017), tested |
 | Parameterised SQL only (identifiers built from constants, as in `app.db.partitions`) | SQL injection | Every step |
 
 ## 6. Dashboard (M4)

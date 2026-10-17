@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-17 (M3 step 3 in review as PR #31; dashboard direction noted)
+**Last updated:** 2026-10-17 (M3 step 4 in review; steps 1-3 merged; old branches deleted)
 
 ## Where the project is
 
@@ -13,12 +13,14 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Done: M2.** OpenAI and Anthropic integrations, host detection, fake provider, examples
   (PRs #13-18). Notes kept below under "M2 notes".
 - **Server** (`server/`): FastAPI with `/healthz` and `/readyz`. Schema and Alembic (M3 step 1).
-  Ingest keys (step 2) and `POST /v1/ingest` (step 3, `app/ingest/`). The examples send to the
+  Ingest keys (step 2), `POST /v1/ingest` (step 3, `app/ingest/`), rate limit and quota (step 4,
+  `app/ingest/limits.py`, `app/core/entitlements.py`). The examples send to the
   local server: `make dev`, `make dev-key`, then `GASLIT_ENDPOINT=http://127.0.0.1:8000` and the
   printed `GASLIT_KEY` (`examples/README.md`).
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M3** (ingest and storage), plan below. Steps 1-2 are merged; step 3 is in review; next is step 4. Hosting is the last step; confirm costs with Saad first.
+- **In progress: M3** (ingest and storage), plan below. Steps 1-3 are merged; step 4 is in
+  review; next is step 5. Hosting is the last step; confirm costs with Saad first.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -35,6 +37,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0014 | Dependabot opens PRs for **security fixes only** (alerts and security updates enabled 2026-10-17). Routine upgrades by hand at each milestone start: `uv lock --upgrade` in both packages, action SHAs, base image tags |
 | 0015 | Ingest keys: `gl_live_` + 43 base62 + 6-character CRC32 (over the prefix too), 57 characters. Only keys found are cached (60 s, 10,000 max); the lookup is `UPDATE ... last_used_at ... RETURNING`, so it also records use, once a minute per key. Database errors propagate, never cached |
 | 0016 | Ingest endpoint: cheap checks first (size, type, key, body caps), records validated one by one (`202` with `{array, index, reason}`, reasons never echo input), host allowlist re-checked, summary counts must add up, 415 for wrong type/encoding, 413 over 1,000 records, any DB error → 503. Two `unnest` inserts, no transaction |
+| 0017 | Rate limit and quota: `entitlements(plan)` (free: 1M calls/month, 50 records/s per key, bursts to 3,000; placeholders). Plan comes from the cached key lookup. Both checked from memory before the body is read. Quota counted in memory, added to `monthly_usage` every 10 s (one statement, returns totals from all machines). Rate limit is a per-machine token bucket in records. Keys of deleted projects refused |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -61,15 +64,25 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    key once plus `key_hash`, `display_prefix`, `last4`; `KeyStore(pool).resolve(key)` returns
    `IngestKey(id, project_id)` or `None` (malformed, unknown or revoked). DB tests run it as
    `ingest_writer`. `DB_TIMEOUT_S` moved to `app/db`.
-3. **`POST /v1/ingest`: IN REVIEW** (`server/app/ingest/{routes,schema,sink}.py`, ADR 0016).
+3. **`POST /v1/ingest`: DONE** (`server/app/ingest/{routes,schema,sink}.py`, ADR 0016).
    `app.state.keys` (`KeyStore`) and `app.state.sink` (`PostgresSink`) are made in the lifespan;
    tests swap in fakes after startup (`tests/test_ingest.py`). `tests/records.py` builds
    SDK-shaped records. `make dev-key` (`app/db/dev_key.py`). All four examples were sent to the
    dev server on 2026-10-17: every record accepted. Typical batch ~0.5 ms CPU, 1,000 records
    19-35 ms.
-4. **Rate limit and quota** from `entitlements()`, `429` with `Retry-After`.
-5. **Retention job** (drop old partitions, and decide how `ensure_partitions` runs in
-   production) and **Prometheus metrics**.
+4. **Rate limit and quota: IN REVIEW** (`server/app/ingest/limits.py`,
+   `server/app/core/entitlements.py`, migration `0002`, ADR 0017). `429 quota_exceeded` with
+   `Retry-After` until the next UTC month, `429 rate_limited` until the bucket refills.
+   `IngestKey` now has `user_id` and `plan`. `app.state.rate` and `app.state.quota` are made in
+   the lifespan with a 10 s flush task and a final flush on shutdown; tests swap in fresh ones
+   with fake clocks and patch `app.ingest.routes.entitlements` for small limits. All four
+   examples accepted on the dev server; `monthly_usage` matched the stored summaries. Checks
+   cost ~4 µs per request. **Ask Saad:** are the placeholder numbers fine (50 records/s per key,
+   bursts to 3,000)? The per-IP limit on invalid keys moved to step 8 (needs a trusted client
+   IP).
+5. **Retention job** (drop old partitions by `entitlements().retention_days`, and decide how
+   `ensure_partitions` runs in production) and **Prometheus metrics** (including quota and
+   rate-limit rejections, brief §9.10).
 6. **Read-time sums** (repository layer) and the end-to-end test: example app → rows → sums
    (also catches the server's enum and host copies drifting from the SDK's).
 7. **Load test**, results in `docs/capacity.md`.

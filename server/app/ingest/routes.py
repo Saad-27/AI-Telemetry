@@ -1,11 +1,13 @@
 """POST /v1/ingest (brief §9.2, §11.5, ADR 0016).
 
 Cheapest checks first: headers, then the key (format and checksum before any database work),
-then the body under hard size caps, then validation, then one insert per record type.
+then the quota and rate limit (from memory, ADR 0017), then the body under hard size caps, then
+validation, then one insert per record type.
 Logs never include bodies, keys, headers or driver error text: only codes, counts and types.
 """
 
 import logging
+import math
 import time
 import zlib
 
@@ -14,6 +16,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
+from app.core.entitlements import entitlements
 from app.ingest.schema import Envelope, validate_records
 
 log = logging.getLogger(__name__)
@@ -47,6 +50,12 @@ async def ingest(request: Request) -> JSONResponse:
         return _unavailable(started, exc)
     if found is None:
         return _reply(started, 401, "invalid_key", {"WWW-Authenticate": "Bearer"})
+    limits = entitlements(found.plan)
+    state = request.app.state
+    if wait := state.quota.wait_s(found.user_id, limits):
+        return _reply(started, 429, "quota_exceeded", {"Retry-After": _seconds(wait)})
+    if wait := state.rate.wait_s(found.id, limits):
+        return _reply(started, 429, "rate_limited", {"Retry-After": _seconds(wait)})
 
     body = await _read(request, MAX_BODY)
     if body is not None and encoding == "gzip":
@@ -64,14 +73,17 @@ async def ingest(request: Request) -> JSONResponse:
         envelope = Envelope.model_validate(data)
     except ValidationError:
         return _reply(started, 400, "invalid_envelope")
-    if len(envelope.summaries) + len(envelope.samples) > MAX_RECORDS:
+    sent = len(envelope.summaries) + len(envelope.samples)
+    if sent > MAX_RECORDS:
         return _reply(started, 413, "too_many_records")
+    state.rate.charge(found.id, sent)
 
     records = validate_records(envelope, now_ms=time.time_ns() // 1_000_000)
     try:
-        await request.app.state.sink.write(found.project_id, records.summaries, records.samples)
+        await state.sink.write(found.project_id, records.summaries, records.samples)
     except Exception as exc:
         return _unavailable(started, exc)
+    state.quota.add(found.user_id, sum(s.count for s in records.summaries))
     accepted = len(records.summaries) + len(records.samples)
     log.info(
         "ingest 202 project=%s accepted=%d rejected=%d ms=%.1f",
@@ -111,6 +123,11 @@ def _gunzip(data: bytes, limit: int) -> bytes | None:
     if not inflater.eof or inflater.unused_data:
         raise ValueError("incomplete gzip")
     return out
+
+
+def _seconds(wait: float) -> str:
+    """Retry-After in whole seconds, rounded up so the client never retries early."""
+    return str(max(1, math.ceil(wait)))
 
 
 def _ms(started: float) -> float:
