@@ -38,6 +38,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0015 | Ingest keys: `gl_live_` + 43 base62 + 6-character CRC32 (over the prefix too), 57 characters. Only keys found are cached (60 s, 10,000 max); the lookup is `UPDATE ... last_used_at ... RETURNING`, so it also records use, once a minute per key. Database errors propagate, never cached |
 | 0016 | Ingest endpoint: cheap checks first (size, type, key, body caps), records validated one by one (`202` with `{array, index, reason}`, reasons never echo input), host allowlist re-checked, summary counts must add up, 415 for wrong type/encoding, 413 over 1,000 records, any DB error → 503. Two `unnest` inserts, no transaction |
 | 0017 | Rate limit and quota, sized so free accounts fit the Neon bill: `entitlements(plan)` (free: 1M calls and 2M records a month, 20 records/s with bursts to 3,000, per account; placeholders). Neon compute fixed at 0.25 CU (~$19.35/month cap); storage per free account ~$0.005 typical, ~$0.10 if abused. Plan comes from the cached key lookup. Both checked from memory before the body is read. Usage counted in memory, added to `monthly_usage` every 10 s (one statement, returns totals from all machines). Rate limit is a per-machine token bucket. Keys of deleted projects refused |
+| 0018 | SDK error samples: the first 3 of each error class per minute per process (was up to 100 a minute); the rest only counted. A capped error doesn't use up its series' `first_of_series` sample. No wire change |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -70,10 +71,10 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    SDK-shaped records. `make dev-key` (`app/db/dev_key.py`). All four examples were sent to the
    dev server on 2026-10-17: every record accepted. Typical batch ~0.5 ms CPU, 1,000 records
    19-35 ms.
-4. **Rate limit and quota: IN REVIEW** (`server/app/ingest/limits.py`,
+4. **Rate limit and quota: IN REVIEW, PR #32** (`server/app/ingest/limits.py`,
    `server/app/core/entitlements.py`, migration `0002`, ADR 0017). `429 quota_exceeded` with
-   `Retry-After` until the next UTC month (calls or records cap), `429 rate_limited` until the
-   account's bucket refills. `IngestKey` now has `user_id` and `plan`. `app.state.rate` and `app.state.quota` are made in
+   `Retry-After` of at most 60 s (calls or records cap; an upgrade resumes within ~2 min),
+   `429 rate_limited` until the account's bucket refills. `IngestKey` now has `user_id` and `plan`. `app.state.rate` and `app.state.quota` are made in
    the lifespan with a 10 s flush task and a final flush on shutdown; tests swap in fresh ones
    with fake clocks and patch `app.ingest.routes.entitlements` for small limits. All four
    examples accepted on the dev server; `monthly_usage` matched the stored summaries. Checks
@@ -82,6 +83,9 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    2. Measured row sizes: 639 B per summary, 356 B per sample, with indexes. **Still open:**
    Saad's monthly database budget, and a re-check of the numbers after the step 7 load test.
    The per-IP limit on invalid keys moved to step 8 (needs a trusted client IP).
+   **SDK error-sample cap: IN REVIEW, PR #33** (ADR 0018): the first 3 errors of each class per
+   minute per process, instead of up to 100 a minute; the rest are only counted. Keeps an
+   incident's traffic under the rate limit. Merges cleanly with #32.
 5. **Retention job** (drop old partitions by `entitlements().retention_days`, and decide how
    `ensure_partitions` runs in production) and **Prometheus metrics** (including quota and
    rate-limit rejections, brief §9.10).
@@ -108,6 +112,17 @@ to change** (switching range, filters or pages should feel instant). Both count 
   queries decide how fast a range or filter change is. Propose a latency target to Saad in
   step 6 and measure it in the step 7 load test.
 - Keep the frontend simple to change: few small components, no UI framework sprawl.
+- **Show recovery quickly (Saad).** When a provider comes back, the dashboard must say so within
+  minutes, not after the 15-minute badge window: a "recovering" badge once the last 2 complete
+  minutes are back within the thresholds (brief §7.3, starting point). The live feed shows
+  successful calls again within seconds; error samples are the first 3 of each type per minute
+  (ADR 0018), so the feed must say error totals come from the summaries.
+- **Upgrades resume monitoring (Saad).** A free account over quota that upgrades must see data
+  again at once. Ingest side is done (ADR 0017): the plan is re-read within 60 s and SDKs check
+  back every 60 s, so sending resumes within ~2 minutes, and queued records under 24 h old fill
+  part of the gap. Dashboard side (M4, and the paid tier when it exists): the upgrade only has to
+  set `users.plan`; the over-quota banner must clear from `monthly_usage` against the new plan's
+  limits, and the usage display should show the gap honestly if one remains.
 
 ## M2 notes (done)
 
