@@ -249,11 +249,25 @@ def test_over_quota_gets_429_until_the_month_ends(
     limit(monkeypatch, monthly_calls=200)
     assert post(client, envelope([summary()])).status_code == 202  # 120 calls
     assert post(client, envelope([summary()], [sample()])).status_code == 202  # 240: now over
+    clock.now += 30
     resp = post(client, envelope(samples=[sample()]))
     assert (resp.status_code, resp.json()) == (429, {"error": "quota_exceeded"})
-    assert resp.headers["Retry-After"] == "60"
+    assert resp.headers["Retry-After"] == "30"  # the reset is sooner than the usual check
     assert len(sink(client).writes) == 2
-    clock.now += 60  # November
+    clock.now += 30  # November
+    assert post(client, envelope([summary()])).status_code == 202
+
+
+def test_an_upgrade_resumes_sending_at_the_next_check(
+    client: TestClient, clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock.now = datetime(2026, 10, 17, tzinfo=UTC).timestamp()
+    limit(monkeypatch, monthly_calls=100)
+    assert post(client, envelope([summary()])).status_code == 202  # 120 calls: over
+    resp = post(client, envelope([summary()]))
+    assert resp.status_code == 429
+    assert resp.headers["Retry-After"] == "60"  # not two weeks: SDKs check back each minute
+    limit(monkeypatch, monthly_calls=10_000)  # the plan the key cache returns next
     assert post(client, envelope([summary()])).status_code == 202
 
 

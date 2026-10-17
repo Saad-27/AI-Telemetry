@@ -80,9 +80,14 @@ Things that shape the design:
   deleted_at)` and `users (id, plan)`. Since it can now see `deleted_at`, keys of deleted
   projects are refused too.
 - **Order:** after the key, before reading the body: quota, then rate limit. Both are checked
-  from memory. `429 {"error": "quota_exceeded"}` with `Retry-After` until the next UTC month,
-  or `429 {"error": "rate_limited"}` with `Retry-After` until the bucket is back to one token.
-  `Retry-After` is in whole seconds, rounded up.
+  from memory. `429 {"error": "quota_exceeded"}`, or `429 {"error": "rate_limited"}` with
+  `Retry-After` until the bucket is back to one token. `Retry-After` is in whole seconds,
+  rounded up.
+- **Over quota, `Retry-After` is 60 s** (less if the month ends sooner), not the time until the
+  reset. **(Saad)** An account that upgrades must resume quickly: the key cache picks up the
+  new plan within 60 s, and the SDK checks back within another 60, so sending resumes within
+  about two minutes. Queued records less than 24 h old are then accepted, which fills part of
+  the gap. Each check is one small request answered from memory.
 - **Rate limit: per account, per machine, in memory** (`RateLimiter`), as a token bucket in
   records. The request takes one token up front, then its records are charged once the
   envelope is parsed, which may leave the bucket in debt. A rejected request costs nothing. A

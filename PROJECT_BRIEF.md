@@ -581,15 +581,19 @@ All numbers are placeholders (Section 16).
 | Calls measured per account | 1M/month (cheap to serve because of Section 19) |
 | Retention | 7 days (summaries, samples and rollups) |
 | Projects | 1 (D7) |
+| Records stored per account | 2M/month. Protective: the SDK sends at most two records per call, so the calls limit is reached first |
+| Records per second per account | 20, with bursts to 3,000. Protective |
+
+The limits are sized so free accounts fit the database bill ([ADR 0017](docs/decisions/0017-rate-limit-and-quota.md)).
 
 **Over quota**
 
-- Ingest returns `429` with `Retry-After` until the quota resets.
-- The SDK backs off and drops events.
-- The dashboard shows a banner.
+- Ingest returns `429` until the quota resets or the account upgrades. `Retry-After` is at most 60 s, so SDKs check back every minute and an upgrade resumes sending within about two minutes.
+- The SDK backs off and keeps what fits in its queue. Records less than 24 h old are accepted once sending resumes, so an upgrade fills part of the gap; the rest is dropped.
+- The dashboard shows a banner, which clears once the account is under its limits again.
 - **The user's app is never affected.**
 
-**Storage cost check:** with summaries and sampling (Section 19), an account at the 1M-calls limit using two models holds roughly 30k records at any time under 7-day retention, about 20 MB before indexes. Verify with real data.
+**Storage cost check:** with summaries and sampling (Section 19), an account at the 1M-calls limit using two models holds roughly 30k records at any time under 7-day retention. Measured on 2026-10-17: 639 bytes per summary and 356 per sample, including indexes, so about 15 MB.
 
 ### 7.3 Health badge rules
 
@@ -603,6 +607,7 @@ These are starting points. Tune them once there is real data.
   - Red when it is more than 2.5×.
 - **Elevated errors:** provider-side error rate (`rate_limited`, `overloaded`, `server_error`, `timeout`, `connection_error`) above max(2%, 3× baseline).
 - **Your-side errors** (`auth_error`, `client_error`, `quota_error`) are shown separately and **never** turn the provider badge red.
+- **Recovering:** when the window is amber or red but the last 2 complete minutes are back within the thresholds (at least 5 calls each), show "recovering" instead. A recovery then shows within about 3 minutes rather than 15, and one good minute in the middle of an incident is not enough. The live feed shows successful calls again within seconds.
 
 ---
 

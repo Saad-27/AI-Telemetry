@@ -26,6 +26,10 @@ MAX_BODY = 1_000_000  # bytes as sent (gzipped or not)
 MAX_DECOMPRESSED = 5_000_000
 MAX_RECORDS = 1_000  # summaries plus samples; over it, 413 makes the SDK split the batch
 RETRY_AFTER_S = "5"
+# Over quota, SDKs check back this often rather than at the reset, so an account that upgrades
+# (picked up by the key cache within 60 s) resumes sending within about two minutes. Each check
+# is answered from memory.
+QUOTA_RETRY_AFTER_S = 60
 
 
 @router.post("/v1/ingest")
@@ -53,6 +57,7 @@ async def ingest(request: Request) -> JSONResponse:
     limits = entitlements(found.plan)
     state = request.app.state
     if wait := state.quota.wait_s(found.user_id, limits):
+        wait = min(wait, QUOTA_RETRY_AFTER_S)
         return _reply(started, 429, "quota_exceeded", {"Retry-After": _seconds(wait)})
     if wait := state.rate.wait_s(found.user_id, limits):
         return _reply(started, 429, "rate_limited", {"Retry-After": _seconds(wait)})
