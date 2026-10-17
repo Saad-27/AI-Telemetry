@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-17 (M3 step 2 merged; step 3, the ingest endpoint, in review)
+**Last updated:** 2026-10-17 (M3 step 4 in review; steps 1-3 merged; old branches deleted)
 
 ## Where the project is
 
@@ -13,12 +13,14 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Done: M2.** OpenAI and Anthropic integrations, host detection, fake provider, examples
   (PRs #13-18). Notes kept below under "M2 notes".
 - **Server** (`server/`): FastAPI with `/healthz` and `/readyz`. Schema and Alembic (M3 step 1).
-  Ingest keys (step 2) and `POST /v1/ingest` (step 3, `app/ingest/`). The examples send to the
+  Ingest keys (step 2), `POST /v1/ingest` (step 3, `app/ingest/`), rate limit and quota (step 4,
+  `app/ingest/limits.py`, `app/core/entitlements.py`). The examples send to the
   local server: `make dev`, `make dev-key`, then `GASLIT_ENDPOINT=http://127.0.0.1:8000` and the
   printed `GASLIT_KEY` (`examples/README.md`).
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M3** (ingest and storage), plan below. Steps 1-2 are merged; step 3 is in review; next is step 4. Hosting is the last step; confirm costs with Saad first.
+- **In progress: M3** (ingest and storage), plan below. Steps 1-3 are merged; step 4 is in
+  review; next is step 5. Hosting is the last step; confirm costs with Saad first.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -35,6 +37,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0014 | Dependabot opens PRs for **security fixes only** (alerts and security updates enabled 2026-10-17). Routine upgrades by hand at each milestone start: `uv lock --upgrade` in both packages, action SHAs, base image tags |
 | 0015 | Ingest keys: `gl_live_` + 43 base62 + 6-character CRC32 (over the prefix too), 57 characters. Only keys found are cached (60 s, 10,000 max); the lookup is `UPDATE ... last_used_at ... RETURNING`, so it also records use, once a minute per key. Database errors propagate, never cached |
 | 0016 | Ingest endpoint: cheap checks first (size, type, key, body caps), records validated one by one (`202` with `{array, index, reason}`, reasons never echo input), host allowlist re-checked, summary counts must add up, 415 for wrong type/encoding, 413 over 1,000 records, any DB error → 503. Two `unnest` inserts, no transaction |
+| 0017 | Rate limit and quota, sized so free accounts fit the Neon bill: `entitlements(plan)` (free: 1M calls and 2M records a month, 20 records/s with bursts to 3,000, per account; placeholders). Neon compute fixed at 0.25 CU (~$19.35/month cap); storage per free account ~$0.005 typical, ~$0.10 if abused. Plan comes from the cached key lookup. Both checked from memory before the body is read. Usage counted in memory, added to `monthly_usage` every 10 s (one statement, returns totals from all machines). Rate limit is a per-machine token bucket. Keys of deleted projects refused |
+| 0018 | SDK error samples: the first 3 of each error class per minute per process (was up to 100 a minute); the rest only counted. A capped error doesn't use up its series' `first_of_series` sample. No wire change |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -61,20 +65,74 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    key once plus `key_hash`, `display_prefix`, `last4`; `KeyStore(pool).resolve(key)` returns
    `IngestKey(id, project_id)` or `None` (malformed, unknown or revoked). DB tests run it as
    `ingest_writer`. `DB_TIMEOUT_S` moved to `app/db`.
-3. **`POST /v1/ingest`: IN REVIEW** (`server/app/ingest/{routes,schema,sink}.py`, ADR 0016).
+3. **`POST /v1/ingest`: DONE** (`server/app/ingest/{routes,schema,sink}.py`, ADR 0016).
    `app.state.keys` (`KeyStore`) and `app.state.sink` (`PostgresSink`) are made in the lifespan;
    tests swap in fakes after startup (`tests/test_ingest.py`). `tests/records.py` builds
    SDK-shaped records. `make dev-key` (`app/db/dev_key.py`). All four examples were sent to the
    dev server on 2026-10-17: every record accepted. Typical batch ~0.5 ms CPU, 1,000 records
    19-35 ms.
-4. **Rate limit and quota** from `entitlements()`, `429` with `Retry-After`.
-5. **Retention job** (drop old partitions, and decide how `ensure_partitions` runs in
-   production) and **Prometheus metrics**.
+4. **Rate limit and quota: IN REVIEW, PR #32** (`server/app/ingest/limits.py`,
+   `server/app/core/entitlements.py`, migration `0002`, ADR 0017). `429 quota_exceeded` with
+   `Retry-After` of at most 60 s (calls or records cap; an upgrade resumes within ~2 min),
+   `429 rate_limited` until the account's bucket refills. `IngestKey` now has `user_id` and `plan`. `app.state.rate` and `app.state.quota` are made in
+   the lifespan with a 10 s flush task and a final flush on shutdown; tests swap in fresh ones
+   with fake clocks and patch `app.ingest.routes.entitlements` for small limits. All four
+   examples accepted on the dev server; `monthly_usage` matched the stored summaries. Checks
+   cost ~4 µs per request. Saad agreed (2026-10-17) to size the limits from the Neon bill:
+   records cap and per-account rate limit added, compute fixed at 0.25 CU in `deploy.md` step
+   2. Measured row sizes: 639 B per summary, 356 B per sample, with indexes. **Still open:**
+   Saad's monthly database budget, and a re-check of the numbers after the step 7 load test.
+   The per-IP limit on invalid keys moved to step 8 (needs a trusted client IP).
+   **Known cost issue, fix proposed (not built; Saad merged #32 first, 2026-10-17):** a blocked
+   account's SDK checks back every 60 s, and the key cache lasts 60 s, so almost every check runs
+   the key lookup (a DB write). If blocked accounts are the only traffic, Neon never sleeps
+   (~$19.35/month paid; on Neon Free the 100 CU-hours run out in ~17 days, then the DB stops for
+   everyone). Proposed: (1) answer blocked accounts from memory until the month ends, no DB;
+   keep the 60 s check, which keeps the cheap Fly machine (~$2/month) awake so its memory and
+   the block survive; (2) the key lookup also returns this month's usage, so a restarted
+   machine blocks at once; (3) an `unblock(account)` hook in ingest, called by the upgrade flow
+   (M4/paid tier), not via the DB (a listening connection keeps Neon awake). It can also make
+   revocation instant. Ask Saad before building it.
+   **SDK error-sample cap: IN REVIEW, PR #33** (ADR 0018): the first 3 errors of each class per
+   minute per process, instead of up to 100 a minute; the rest are only counted. Keeps an
+   incident's traffic under the rate limit. Merges cleanly with #32.
+5. **Retention job** (drop old partitions by `entitlements().retention_days`, and decide how
+   `ensure_partitions` runs in production) and **Prometheus metrics** (including quota and
+   rate-limit rejections, brief §9.10).
 6. **Read-time sums** (repository layer) and the end-to-end test: example app → rows → sums
    (also catches the server's enum and host copies drifting from the SDK's).
 7. **Load test**, results in `docs/capacity.md`.
 8. **Hosting** (runbook steps 2-6), with login roles created by SQL and granted
    `ingest_writer`/`dashboard_app`. Confirm costs with Saad first.
+
+## Dashboard direction (Saad, 2026-10-17; for M4, and steps 6-7 now)
+
+The dashboard must be **clear, well organised and visually appealing**, and **fast to load and
+to change** (switching range, filters or pages should feel instant). Both count equally.
+
+- **Clarity first.** Brief §10.2 says "dense, dark-first"; density must never cost clarity.
+  Clear hierarchy (health summary first, details on demand), consistent spacing and units,
+  plain labels, and §10.3's display rules. Ask Saad whether "dense" still stands.
+- **Agree the look before coding.** Start M4 with a mockup of the overview and model detail
+  pages for Saad to approve, then build.
+- **Speed is designed in:** brief §21's budget (~200 KB gzipped JS, uPlot only, lazy-loaded
+  detail pages), no layout shift while loading, cached responses so changing a filter only
+  fetches what changed.
+- **It starts in M3.** The dashboard reads by summing `summary_records` (ADR 0008), so step 6's
+  queries decide how fast a range or filter change is. Propose a latency target to Saad in
+  step 6 and measure it in the step 7 load test.
+- Keep the frontend simple to change: few small components, no UI framework sprawl.
+- **Show recovery quickly (Saad).** When a provider comes back, the dashboard must say so within
+  minutes, not after the 15-minute badge window: a "recovering" badge once the last 2 complete
+  minutes are back within the thresholds (brief §7.3, starting point). The live feed shows
+  successful calls again within seconds; error samples are the first 3 of each type per minute
+  (ADR 0018), so the feed must say error totals come from the summaries.
+- **Upgrades resume monitoring (Saad).** A free account over quota that upgrades must see data
+  again at once. Ingest side is done (ADR 0017): the plan is re-read within 60 s and SDKs check
+  back every 60 s, so sending resumes within ~2 minutes, and queued records under 24 h old fill
+  part of the gap. Dashboard side (M4, and the paid tier when it exists): the upgrade only has to
+  set `users.plan`; the over-quota banner must clear from `monthly_usage` against the new plan's
+  limits, and the usage display should show the gap honestly if one remains.
 
 ## M2 notes (done)
 

@@ -28,12 +28,15 @@ _SHAPE = re.compile(f"{PREFIX}[0-9A-Za-z]{{{BODY_LEN + CHECK_LEN}}}")
 CACHE_TTL_S = 60.0  # a revoked key stops working within this (brief §11.4)
 CACHE_MAX = 10_000
 
-# One round trip finds a live key and marks it used, so `last_used_at` is written at most once
-# per key per cache period (brief §9.2 step 7). Unknown and revoked keys match no row.
+# One round trip finds a live key and its account's plan, and marks the key used, so
+# `last_used_at` is written at most once per key per cache period (brief §9.2 step 7). Unknown
+# and revoked keys, and keys of deleted projects, match no row.
 _TOUCH = """
-    UPDATE ingest_keys SET last_used_at = now()
-    WHERE key_hash = $1 AND revoked_at IS NULL
-    RETURNING id, project_id
+    UPDATE ingest_keys k SET last_used_at = now()
+    FROM projects p JOIN users u ON u.id = p.owner_user_id
+    WHERE k.key_hash = $1 AND k.revoked_at IS NULL
+      AND p.id = k.project_id AND p.deleted_at IS NULL
+    RETURNING k.id, k.project_id, u.id AS user_id, u.plan
 """
 
 
@@ -83,6 +86,8 @@ def generate() -> NewKey:
 class IngestKey:
     id: UUID
     project_id: UUID
+    user_id: UUID  # the project's owner: quotas are per account (brief §7.2)
+    plan: str
 
 
 class KeyStore:
@@ -107,7 +112,8 @@ class KeyStore:
         self._cache: dict[bytes, tuple[float, IngestKey]] = {}
 
     async def resolve(self, key: str) -> IngestKey | None:
-        """The key's project, or None if the key is malformed, unknown or revoked.
+        """The key's project and account, or None if the key is malformed, unknown or revoked,
+        or its project deleted. A plan change, like a revocation, applies within CACHE_TTL_S.
 
         Database errors propagate and are not cached: an outage must not look like a bad key.
         """
@@ -123,7 +129,7 @@ class KeyStore:
         self._cache.pop(key_hash, None)
         if row is None:
             return None
-        found = IngestKey(row["id"], row["project_id"])
+        found = IngestKey(row["id"], row["project_id"], row["user_id"], row["plan"])
         if len(self._cache) >= self._max_entries:
             del self._cache[next(iter(self._cache))]
         # Expiry counts from before the query, so a revocation is never served for longer.

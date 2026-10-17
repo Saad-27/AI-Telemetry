@@ -1,4 +1,4 @@
-"""The first migration: partitions, idempotent inserts, roles and row-level security."""
+"""The migrations: partitions, idempotent inserts, roles and row-level security."""
 
 import uuid
 from collections.abc import AsyncIterator
@@ -104,7 +104,8 @@ async def test_ingest_writer_cannot_read_data(conn: asyncpg.Connection) -> None:
         for query in (
             "SELECT 1 FROM summary_records",
             "SELECT 1 FROM call_samples",
-            "SELECT 1 FROM users",
+            "SELECT email FROM users",
+            "SELECT name FROM projects",
             "SELECT display_prefix FROM ingest_keys",
         ):
             # Each in a savepoint that rolls back, so the outer transaction survives.

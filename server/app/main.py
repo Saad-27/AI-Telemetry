@@ -1,6 +1,7 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import asyncpg
 from fastapi import FastAPI, Request
@@ -9,6 +10,7 @@ from fastapi.responses import JSONResponse
 from app.core.config import Settings, load_settings
 from app.db import DB_TIMEOUT_S
 from app.ingest.keys import KeyStore
+from app.ingest.limits import Quota, RateLimiter
 from app.ingest.routes import router as ingest_router
 from app.ingest.sink import PostgresSink
 
@@ -28,9 +30,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         app.state.keys = KeyStore(app.state.pool)
         app.state.sink = PostgresSink(app.state.pool)
+        app.state.rate = RateLimiter()
+        quota = app.state.quota = Quota(app.state.pool)
+        flusher = asyncio.create_task(quota.flush_every())
         try:
             yield
         finally:
+            flusher.cancel()
+            with suppress(asyncio.CancelledError):
+                await flusher
+            await quota.flush_logged()  # Fly stops idle machines; keep their counts
             await app.state.pool.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
