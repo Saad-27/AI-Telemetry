@@ -3,7 +3,13 @@ name = "server"
 version = "0.0.0"
 description = "Ingest and dashboard API"
 requires-python = ">=3.12"
-dependencies = ["fastapi", "uvicorn", "asyncpg"]
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "asyncpg",
+    "alembic>=1.20.0",
+    "sqlalchemy[asyncio]>=2.1.5",
+]
 
 [dependency-groups]
 dev = ["pytest", "httpx2", "mypy", "ruff"]
@@ -16,7 +22,7 @@ extend = "../ruff.toml"
 
 [tool.mypy]
 strict = true
-files = ["app", "tests"]
+files = ["app", "migrations", "tests"]
 
 [[tool.mypy.overrides]]
 module = ["asyncpg", "asyncpg.*"]
@@ -25,3 +31,4 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = ["db: needs Postgres (DATABASE_URL, or the compose database)"]

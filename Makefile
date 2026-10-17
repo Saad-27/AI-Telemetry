@@ -2,7 +2,7 @@ SDK    := sdk/python
 SERVER := server
 PKGS   := $(SDK) $(SERVER)
 
-.PHONY: dev down db test lint fmt bench
+.PHONY: dev down db migrate test lint fmt bench
 
 dev:  ## Postgres + server (with reload) on 127.0.0.1:8000
 	docker compose up --build
@@ -13,6 +13,10 @@ down:
 # Starts the compose Postgres unless DATABASE_URL points at another one.
 db:
 	@if [ -z "$$DATABASE_URL" ]; then docker compose up -d --wait postgres; fi
+
+# Schema to the latest migration, then this week's partitions (both as the schema owner).
+migrate: db
+	cd $(SERVER) && uv run alembic upgrade head && uv run python -m app.db.partitions
 
 test: db
 	@for d in $(PKGS); do echo "== test $$d"; (cd $$d && uv run pytest -q) || exit 1; done
