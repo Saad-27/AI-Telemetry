@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-17 (M3 step 2 merged; step 3, the ingest endpoint, in review)
+**Last updated:** 2026-10-17 (M3 step 3 in review as PR #31; dashboard direction noted)
 
 ## Where the project is
 
@@ -75,6 +75,24 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 7. **Load test**, results in `docs/capacity.md`.
 8. **Hosting** (runbook steps 2-6), with login roles created by SQL and granted
    `ingest_writer`/`dashboard_app`. Confirm costs with Saad first.
+
+## Dashboard direction (Saad, 2026-10-17; for M4, and steps 6-7 now)
+
+The dashboard must be **clear, well organised and visually appealing**, and **fast to load and
+to change** (switching range, filters or pages should feel instant). Both count equally.
+
+- **Clarity first.** Brief §10.2 says "dense, dark-first"; density must never cost clarity.
+  Clear hierarchy (health summary first, details on demand), consistent spacing and units,
+  plain labels, and §10.3's display rules. Ask Saad whether "dense" still stands.
+- **Agree the look before coding.** Start M4 with a mockup of the overview and model detail
+  pages for Saad to approve, then build.
+- **Speed is designed in:** brief §21's budget (~200 KB gzipped JS, uPlot only, lazy-loaded
+  detail pages), no layout shift while loading, cached responses so changing a filter only
+  fetches what changed.
+- **It starts in M3.** The dashboard reads by summing `summary_records` (ADR 0008), so step 6's
+  queries decide how fast a range or filter change is. Propose a latency target to Saad in
+  step 6 and measure it in the step 7 load test.
+- Keep the frontend simple to change: few small components, no UI framework sprawl.
 
 ## M2 notes (done)
 
