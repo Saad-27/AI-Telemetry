@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-17 (M3 step 1 and the security config merged; Dependabot security-only)
+**Last updated:** 2026-10-17 (M3 step 2, ingest keys, in review; stacked on PR #29)
 
 ## Where the project is
 
@@ -13,10 +13,10 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Done: M2.** OpenAI and Anthropic integrations, host detection, fake provider, examples
   (PRs #13-18). Notes kept below under "M2 notes".
 - **Server** (`server/`): FastAPI with `/healthz` and `/readyz`. Schema and Alembic (M3 step 1).
-  No ingest yet.
+  Ingest keys (step 2, `app/ingest/keys.py`). No ingest endpoint yet.
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M3** (ingest and storage), plan below. Step 1 is merged; next is step 2. Hosting is the last step; confirm costs with Saad first.
+- **In progress: M3** (ingest and storage), plan below. Step 1 is merged; step 2 is in review; next is step 3. Hosting is the last step; confirm costs with Saad first.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -31,6 +31,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0012 | Examples run offline: the fake provider acts as an HTTP proxy so clients keep real hostnames (`http://` URLs). The fake also serves Azure, Bedrock `invoke` and Vertex paths |
 | 0013 | First schema: day partitions made by `app.db.partitions`, `NOLOGIN` roles `ingest_writer`/`dashboard_app` with RLS on data tables, ingest batches with `INSERT ... unnest` because `COPY` is refused under RLS, one column per error class, Alembic over asyncpg |
 | 0014 | Dependabot opens PRs for **security fixes only** (alerts and security updates enabled 2026-10-17). Routine upgrades by hand at each milestone start: `uv lock --upgrade` in both packages, action SHAs, base image tags |
+| 0015 | Ingest keys: `gl_live_` + 43 base62 + 6-character CRC32 (over the prefix too), 57 characters. Only keys found are cached (60 s, 10,000 max); the lookup is `UPDATE ... last_used_at ... RETURNING`, so it also records use, once a minute per key. Database errors propagate, never cached |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -53,8 +54,12 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    `make migrate` = `alembic upgrade head` + this week's partitions. Tests (`-m db`) run in a
    fresh `gaslit_test` database next to `DATABASE_URL`'s and cover partitions, idempotent
    inserts, role grants and RLS.
-2. **Ingest keys:** `gl_live_` + base62 + checksum (brief §11.4), SHA-256 lookup, 60 s cache.
-3. **`POST /v1/ingest`:** size caps with a streaming gunzip, Pydantic validation of the §19
+2. **Ingest keys: IN REVIEW** (`server/app/ingest/keys.py`, ADR 0015). `generate()` returns the
+   key once plus `key_hash`, `display_prefix`, `last4`; `KeyStore(pool).resolve(key)` returns
+   `IngestKey(id, project_id)` or `None` (malformed, unknown or revoked). DB tests run it as
+   `ingest_writer`. `DB_TIMEOUT_S` moved to `app/db`.
+3. **`POST /v1/ingest`:** `Bearer` parsing, `KeyStore` created in the lifespan (`None` → 401,
+   database error → 503), size caps with a streaming gunzip, Pydantic validation of the §19
    wire format, server fields, `INSERT ... SELECT FROM unnest() ON CONFLICT DO NOTHING`
    behind the `Sink` seam (§20.7).
 4. **Rate limit and quota** from `entitlements()`, `429` with `Retry-After`.
@@ -137,6 +142,9 @@ source, not memory, before relying on it (brief §17).
   which rejects it. Remove it from `DATABASE_URL` (runbook step 2).
 - `make test` needs Docker for the server's database tests. Cloud sessions have no Docker: run
   `uv run pytest` in `sdk/python`, and in `server` with `-m "not db"`.
+- No way yet to create a key outside tests (the dashboard does it in M4). Step 3 needs a small
+  dev command (user + project + key, printing the key) to try the endpoint with the examples.
+- Soft-deleting a project must revoke its keys in the same transaction (M4, ADR 0015).
 - The app still connects as the schema owner, which bypasses RLS. Separate login roles for
   ingest and the dashboard come with hosting (M3 step 8) and M4 (ADR 0013).
 

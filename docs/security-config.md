@@ -27,6 +27,7 @@ How to apply a setting is in [deploy.md](deploy.md).
 | RLS on `summary_records` and `call_samples`; dashboard queries run in a transaction with `SET LOCAL app.project_id` | A missed `WHERE project_id = ...` cannot return another tenant's rows | **Done** in the schema (ADR 0013); takes effect with the roles above |
 | Grants only on the partitioned parents, never on partitions | RLS applies through the parent only. Direct access to a partition would skip it | **Done** |
 | `ingest_writer` cannot read data, users or key prefixes | A leaked or buggy ingest process cannot be used to read tenants' data | **Done**, tested |
+| Soft-deleting a project revokes its keys in the same transaction | `ingest_writer` cannot read `projects`, so a deleted project's keys would keep writing (ADR 0015) | M4 |
 | Every dashboard route goes through `require_project_member`; unknown and foreign projects both return 404; IDOR suite generated from the route table | Stops one user reading another's project by guessing IDs | M4 |
 
 ## 3. Hosting (Fly)
@@ -57,7 +58,8 @@ How to apply a setting is in [deploy.md](deploy.md).
 | Size caps before reading the body; gunzip streamed with a 5 MB cap | Stops memory exhaustion and zip bombs | Step 3 |
 | Pydantic with `extra="forbid"`, strict enums and regexes | Content-like or oversized strings can never be stored (P1), and stored XSS is blocked at the door | Step 3 |
 | Error responses carry a reason code, never input or a stack trace | Responses must not echo what was sent | Step 3 |
-| Only the SHA-256 of a key is stored; key cache at most 60 s | A database leak does not leak usable keys; revocation takes effect within a minute | Step 2 |
+| Only the SHA-256 of a key is stored; key cache at most 60 s | A database leak does not leak usable keys; revocation takes effect within a minute | **Done** (`app/ingest/keys.py`, ADR 0015), tested |
+| Key format and checksum checked before any database work; database errors never cached as "bad key" | Garbage keys cost no query; an outage returns 503, not a 401 that stops users' SDKs | **Done**, tested; the 401/503 mapping is step 3 |
 | Parameterised SQL only (identifiers built from constants, as in `app.db.partitions`) | SQL injection | Every step |
 
 ## 6. Dashboard (M4)
