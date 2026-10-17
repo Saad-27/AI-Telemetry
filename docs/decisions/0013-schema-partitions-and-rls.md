@@ -1,6 +1,6 @@
 # 0013: First schema: day partitions, group roles and row-level security
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-17
 
 ## Context

@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-17 (M2 done; M3 step 1, the schema, in a PR)
+**Last updated:** 2026-10-17 (M3 step 1 and the security config merged; Dependabot security-only)
 
 ## Where the project is
 
@@ -12,12 +12,11 @@ session, in the same PR as the session's other changes, so it reaches `main`.
   exit handling, and debug mode. Privacy, fail-open tests and the overhead benchmark run in CI.
 - **Done: M2.** OpenAI and Anthropic integrations, host detection, fake provider, examples
   (PRs #13-18). Notes kept below under "M2 notes".
-- **Server** (`server/`): FastAPI with `/healthz` and `/readyz`. Schema and Alembic in review
-  (M3 step 1). No ingest yet.
+- **Server** (`server/`): FastAPI with `/healthz` and `/readyz`. Schema and Alembic (M3 step 1).
+  No ingest yet.
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M3** (ingest and storage), plan below. Step 1 is on branch `m3-schema`,
-  waiting for Saad's review. Hosting is the last step; confirm costs with Saad first.
+- **In progress: M3** (ingest and storage), plan below. Step 1 is merged; next is step 2. Hosting is the last step; confirm costs with Saad first.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -30,7 +29,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0009 | Host detection rules the brief left open: only the hostname is read, unknown Bedrock vendor is `custom`, Vertex global region is `global`, "local" means not globally routable |
 | 0010 | OpenAI integration: wrap `create` on the resource classes, measure streams by swapping their inner iterator, dropped streams are `cancelled`, `openai` 1.30+ supported. Azure deployment names are hidden (confirmed) |
 | 0012 | Examples run offline: the fake provider acts as an HTTP proxy so clients keep real hostnames (`http://` URLs). The fake also serves Azure, Bedrock `invoke` and Vertex paths |
-| 0013 | First schema (proposed, in review): day partitions made by `app.db.partitions`, `NOLOGIN` roles `ingest_writer`/`dashboard_app` with RLS on data tables, ingest batches with `INSERT ... unnest` because `COPY` is refused under RLS, one column per error class, Alembic over asyncpg |
+| 0013 | First schema: day partitions made by `app.db.partitions`, `NOLOGIN` roles `ingest_writer`/`dashboard_app` with RLS on data tables, ingest batches with `INSERT ... unnest` because `COPY` is refused under RLS, one column per error class, Alembic over asyncpg |
+| 0014 | Dependabot opens PRs for **security fixes only** (alerts and security updates enabled 2026-10-17). Routine upgrades by hand at each milestone start: `uv lock --upgrade` in both packages, action SHAs, base image tags |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -42,13 +42,14 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | PyPI name `gaslit` | Claimed: placeholder 0.0.0 uploaded 2026-10-14. The upload token was deleted |
 | GitHub branch protection on `main` | Done |
 | GitHub secret scanning | Saad chose not to enable it |
+| Dependabot alerts and security updates | Enabled 2026-10-17 (ADR 0014). Version-update PRs are off |
 | Repo visibility | **Public**, which keeps environment approval gates free (ADR 0006). D5 said private; Saad has not changed it |
 | Neon, Fly app, Cloudflare tokens, GitHub environments, Terraform, certificates | **Not started.** Runbook steps 2-6 in `docs/deploy.md`, at M3 |
 | Google and GitHub OAuth apps | M4 (runbook step 7) |
 
 ## Next: M3 plan (small PRs, in order)
 
-1. **Schema: IN REVIEW** (`server/migrations/`, `server/app/db/partitions.py`, ADR 0013).
+1. **Schema: DONE** (`server/migrations/`, `server/app/db/partitions.py`, ADR 0013).
    `make migrate` = `alembic upgrade head` + this week's partitions. Tests (`-m db`) run in a
    fresh `gaslit_test` database next to `DATABASE_URL`'s and cover partitions, idempotent
    inserts, role grants and RLS.
@@ -125,7 +126,7 @@ source, not memory, before relying on it (brief §17).
 
 ## Loose ends
 
-- **Security config:** `docs/security-config.md` (PR #28) lists every setting that keeps users'
+- **Security config:** `docs/security-config.md` lists every setting that keeps users'
   data safe, with status. Check it at each step. Open gap for step 8: requests to
   `*.fly.dev` skip Cloudflare; proposed fix is a secret header added by Cloudflare.
 
