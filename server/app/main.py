@@ -7,10 +7,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.core.config import Settings, load_settings
+from app.db import DB_TIMEOUT_S
 
 log = logging.getLogger(__name__)
-
-_DB_TIMEOUT_S = 2.0
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -20,7 +19,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # min_size=0: no connection at startup, so liveness works while the DB is down.
         app.state.pool = await asyncpg.create_pool(
-            settings.database_url, min_size=0, max_size=5, timeout=_DB_TIMEOUT_S
+            settings.database_url, min_size=0, max_size=5, timeout=DB_TIMEOUT_S
         )
         try:
             yield
@@ -36,8 +35,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/readyz")
     async def readyz(request: Request) -> JSONResponse:
         try:
-            async with request.app.state.pool.acquire(timeout=_DB_TIMEOUT_S) as conn:
-                await conn.fetchval("SELECT 1", timeout=_DB_TIMEOUT_S)
+            async with request.app.state.pool.acquire(timeout=DB_TIMEOUT_S) as conn:
+                await conn.fetchval("SELECT 1", timeout=DB_TIMEOUT_S)
         except Exception as exc:
             # Type only: driver messages can echo connection details.
             log.warning("readyz: database unreachable (%s)", type(exc).__name__)
