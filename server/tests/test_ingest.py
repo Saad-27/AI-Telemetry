@@ -269,6 +269,16 @@ def test_quota_counts_calls_only_once_stored(
     assert post(client, envelope([summary()])).status_code == 429
 
 
+def test_quota_caps_records_stored(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    limit(monkeypatch, monthly_records=3)
+    # Only accepted records count: here 2 of 3.
+    resp = post(client, envelope(samples=[sample(), sample(provider="x"), sample()]))
+    assert resp.json()["accepted"] == 2
+    assert post(client, envelope(samples=[sample()])).status_code == 202
+    resp = post(client, envelope(samples=[sample()]))
+    assert (resp.status_code, resp.json()) == (429, {"error": "quota_exceeded"})
+
+
 def test_rate_limit_counts_records(
     client: TestClient, ticks: Clock, monkeypatch: pytest.MonkeyPatch
 ) -> None:

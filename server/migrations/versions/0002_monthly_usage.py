@@ -1,4 +1,5 @@
-"""Calls measured per account per month, and what ingest reads to apply limits.
+"""Calls measured and records stored per account per month, and what ingest reads to apply
+limits.
 
 See ADR 0017. Ingest adds its in-memory counts here every few seconds; the dashboard's banner
 reads it in M4.
@@ -22,6 +23,7 @@ UPGRADE = [
         user_id uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
         month date NOT NULL CHECK (extract(day FROM month) = 1),
         calls bigint NOT NULL CHECK (calls >= 0),
+        records bigint NOT NULL CHECK (records >= 0),
         PRIMARY KEY (user_id, month)
     )
     """,
@@ -30,7 +32,7 @@ UPGRADE = [
     "GRANT SELECT (id, owner_user_id, deleted_at) ON projects TO ingest_writer",
     "GRANT SELECT (id, plan) ON users TO ingest_writer",
     # INSERT ... ON CONFLICT DO UPDATE ... RETURNING needs all three.
-    "GRANT SELECT, INSERT, UPDATE (calls) ON monthly_usage TO ingest_writer",
+    "GRANT SELECT, INSERT, UPDATE (calls, records) ON monthly_usage TO ingest_writer",
 ]
 
 DOWNGRADE = [

@@ -54,7 +54,7 @@ async def ingest(request: Request) -> JSONResponse:
     state = request.app.state
     if wait := state.quota.wait_s(found.user_id, limits):
         return _reply(started, 429, "quota_exceeded", {"Retry-After": _seconds(wait)})
-    if wait := state.rate.wait_s(found.id, limits):
+    if wait := state.rate.wait_s(found.user_id, limits):
         return _reply(started, 429, "rate_limited", {"Retry-After": _seconds(wait)})
 
     body = await _read(request, MAX_BODY)
@@ -76,15 +76,15 @@ async def ingest(request: Request) -> JSONResponse:
     sent = len(envelope.summaries) + len(envelope.samples)
     if sent > MAX_RECORDS:
         return _reply(started, 413, "too_many_records")
-    state.rate.charge(found.id, sent)
+    state.rate.charge(found.user_id, sent)
 
     records = validate_records(envelope, now_ms=time.time_ns() // 1_000_000)
     try:
         await state.sink.write(found.project_id, records.summaries, records.samples)
     except Exception as exc:
         return _unavailable(started, exc)
-    state.quota.add(found.user_id, sum(s.count for s in records.summaries))
     accepted = len(records.summaries) + len(records.samples)
+    state.quota.add(found.user_id, sum(s.count for s in records.summaries), accepted)
     log.info(
         "ingest 202 project=%s accepted=%d rejected=%d ms=%.1f",
         found.project_id,

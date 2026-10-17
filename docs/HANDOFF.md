@@ -37,7 +37,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0014 | Dependabot opens PRs for **security fixes only** (alerts and security updates enabled 2026-10-17). Routine upgrades by hand at each milestone start: `uv lock --upgrade` in both packages, action SHAs, base image tags |
 | 0015 | Ingest keys: `gl_live_` + 43 base62 + 6-character CRC32 (over the prefix too), 57 characters. Only keys found are cached (60 s, 10,000 max); the lookup is `UPDATE ... last_used_at ... RETURNING`, so it also records use, once a minute per key. Database errors propagate, never cached |
 | 0016 | Ingest endpoint: cheap checks first (size, type, key, body caps), records validated one by one (`202` with `{array, index, reason}`, reasons never echo input), host allowlist re-checked, summary counts must add up, 415 for wrong type/encoding, 413 over 1,000 records, any DB error → 503. Two `unnest` inserts, no transaction |
-| 0017 | Rate limit and quota: `entitlements(plan)` (free: 1M calls/month, 50 records/s per key, bursts to 3,000; placeholders). Plan comes from the cached key lookup. Both checked from memory before the body is read. Quota counted in memory, added to `monthly_usage` every 10 s (one statement, returns totals from all machines). Rate limit is a per-machine token bucket in records. Keys of deleted projects refused |
+| 0017 | Rate limit and quota, sized so free accounts fit the Neon bill: `entitlements(plan)` (free: 1M calls and 2M records a month, 20 records/s with bursts to 3,000, per account; placeholders). Neon compute fixed at 0.25 CU (~$19.35/month cap); storage per free account ~$0.005 typical, ~$0.10 if abused. Plan comes from the cached key lookup. Both checked from memory before the body is read. Usage counted in memory, added to `monthly_usage` every 10 s (one statement, returns totals from all machines). Rate limit is a per-machine token bucket. Keys of deleted projects refused |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -72,14 +72,16 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    19-35 ms.
 4. **Rate limit and quota: IN REVIEW** (`server/app/ingest/limits.py`,
    `server/app/core/entitlements.py`, migration `0002`, ADR 0017). `429 quota_exceeded` with
-   `Retry-After` until the next UTC month, `429 rate_limited` until the bucket refills.
-   `IngestKey` now has `user_id` and `plan`. `app.state.rate` and `app.state.quota` are made in
+   `Retry-After` until the next UTC month (calls or records cap), `429 rate_limited` until the
+   account's bucket refills. `IngestKey` now has `user_id` and `plan`. `app.state.rate` and `app.state.quota` are made in
    the lifespan with a 10 s flush task and a final flush on shutdown; tests swap in fresh ones
    with fake clocks and patch `app.ingest.routes.entitlements` for small limits. All four
    examples accepted on the dev server; `monthly_usage` matched the stored summaries. Checks
-   cost ~4 µs per request. **Ask Saad:** are the placeholder numbers fine (50 records/s per key,
-   bursts to 3,000)? The per-IP limit on invalid keys moved to step 8 (needs a trusted client
-   IP).
+   cost ~4 µs per request. Saad agreed (2026-10-17) to size the limits from the Neon bill:
+   records cap and per-account rate limit added, compute fixed at 0.25 CU in `deploy.md` step
+   2. Measured row sizes: 639 B per summary, 356 B per sample, with indexes. **Still open:**
+   Saad's monthly database budget, and a re-check of the numbers after the step 7 load test.
+   The per-IP limit on invalid keys moved to step 8 (needs a trusted client IP).
 5. **Retention job** (drop old partitions by `entitlements().retention_days`, and decide how
    `ensure_partitions` runs in production) and **Prometheus metrics** (including quota and
    rate-limit rejections, brief §9.10).

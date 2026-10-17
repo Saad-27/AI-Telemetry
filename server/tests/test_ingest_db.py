@@ -139,18 +139,18 @@ def test_dev_key_reuses_the_dev_project(database_url: str) -> None:
     assert first == second and key1 != key2
 
 
-def test_calls_are_counted_for_the_account(database_url: str) -> None:
+def test_usage_is_counted_for_the_account(database_url: str) -> None:
     project, key = dev_key(database_url)
     query = (
-        "SELECT coalesce(sum(m.calls), 0) FROM monthly_usage m "
+        "SELECT coalesce(sum(m.calls), 0), coalesce(sum(m.records), 0) FROM monthly_usage m "
         "JOIN projects p ON p.owner_user_id = m.user_id WHERE p.id = $1"
     )
-    [(before,)] = run(database_url, query, project)
+    [(calls, records)] = run(database_url, query, project)
+    batch = envelope([summary()], [sample(), sample(provider="x")])  # one sample rejected
     with TestClient(create_app(Settings(database_url=database_url))) as client:
-        assert post(client, key, envelope([summary()], [sample()]))[0] == 202
-    # Counted in memory, then stored when the app stops.
-    [(after,)] = run(database_url, query, project)
-    assert after - before == 120
+        assert post(client, key, batch)[1]["accepted"] == 2
+    # Counted in memory, then stored when the app stops. Rejected records are not counted.
+    assert run(database_url, query, project) == [(calls + 120, records + 2)]
 
 
 def test_records_on_both_sides_of_midnight(client: TestClient, database_url: str) -> None:

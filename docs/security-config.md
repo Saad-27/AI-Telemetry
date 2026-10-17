@@ -60,7 +60,8 @@ How to apply a setting is in [deploy.md](deploy.md).
 | Error responses carry a reason code, never input or a stack trace | Responses must not echo what was sent | **Done**: field names and error types only, never unknown keys or values, tested |
 | Only the SHA-256 of a key is stored; key cache at most 60 s | A database leak does not leak usable keys; revocation takes effect within a minute | **Done** (`app/ingest/keys.py`, ADR 0015), tested |
 | Key format and checksum checked before any database work; database errors never cached as "bad key" | Garbage keys cost no query; an outage returns 503, not a 401 that stops users' SDKs | **Done**, tested |
-| Per-key rate limit (records/s) and per-account monthly quota, both from `entitlements()`; `429` with `Retry-After` | A leaked key or a runaway app cannot flood the database or other accounts | **Done** (`app/ingest/limits.py`, ADR 0017), tested |
+| Per-account rate limit (records/s) and monthly caps on calls and records, all from `entitlements()`; `429` with `Retry-After` | A leaked key or a runaway app cannot flood the database, run up its storage bill or slow other accounts | **Done** (`app/ingest/limits.py`, ADR 0017), tested |
+| Neon compute fixed at 0.25 CU (no autoscaling) | Caps the compute bill at ~$19.35 a month whatever the load | Runbook step 2 |
 | Parameterised SQL only (identifiers built from constants, as in `app.db.partitions`) | SQL injection | Every step |
 
 ## 6. Dashboard (M4)

@@ -79,6 +79,13 @@ Edit its query string before storing it:
   Neon's certificate against the CA bundle in the image (`PGSSLROOTCERT`). The server refuses to
   start on Fly without it ([security-config.md](security-config.md)).
 
+**Fix the compute size, which caps the bill.** In the branch's compute settings, set autoscaling
+to a minimum and maximum of **0.25 CU**, and leave scale-to-zero on. On the paid plan, compute
+then costs at most about $19.35 a month ($0.106 per CU-hour × 730 hours), however much traffic
+arrives. Past its capacity, ingest slows and returns 503, and SDKs retry or drop. Storage, the
+other cost, is bounded by `entitlements()` ([ADR 0017](decisions/0017-rate-limit-and-quota.md)).
+Raise the size only when the load test or production metrics show it is needed.
+
 **Fly:** install `flyctl` and run `fly auth login`, then:
 
 ```bash
