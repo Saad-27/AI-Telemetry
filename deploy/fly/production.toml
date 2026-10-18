@@ -51,4 +51,6 @@ primary_region = "fra" # D12: EU-hosted
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "256mb" # the smallest size; today's server needs far less. Revisit with the M3 load test.
+  # The smallest size. The load test peaked at 104 MB, and 166 MB under a flood (docs/capacity.md).
+  # CPU, not memory, limits this machine: 6.25% of a core once its burst balance is spent.
+  memory = "256mb"
