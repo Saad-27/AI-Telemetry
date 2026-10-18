@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-18 (M3 steps 1-4 merged; blocked-accounts fix and all of step 5 in review)
+**Last updated:** 2026-10-18 (M3 steps 1-5 and the blocked-accounts fix merged: PRs #34-#36; step 6 next)
 
 ## Where the project is
 
@@ -19,10 +19,9 @@ session, in the same PR as the session's other changes, so it reaches `main`.
   printed `GASLIT_KEY` (`examples/README.md`).
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M3** (ingest and storage), plan below. Steps 1-4 are merged; the
-  blocked-accounts fix (#34) and step 5 (retention #35, metrics #36) are in review as stacked
-  PRs, to merge in that order. Step 6 is next. Hosting is the last step; confirm costs with
-  Saad first.
+- **In progress: M3** (ingest and storage), plan below. Steps 1-5 are merged, with the
+  blocked-accounts fix (#34; step 5 was #35 and #36). Step 6 is next. Hosting is the last
+  step; confirm costs with Saad first.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -87,7 +86,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    invalid keys moved to step 8 (needs a trusted client IP).
    **SDK error-sample cap: DONE, PR #33** (ADR 0018): the first 3 errors of each class per
    minute per process; the rest are only counted.
-   **Blocked accounts from memory: IN REVIEW, PR #34** (branch `m3-blocked-accounts`, ADR 0019; Saad
+   **Blocked accounts from memory: DONE, PR #34** (ADR 0019; Saad
    approved the fix 2026-10-18). `KeyStore(pool, keep=quota.blocks, learn=quota.learn)`: an
    expired key whose account is over quota is still served, so its 429s need no database. The
    key lookup left-joins `monthly_usage` for this UTC month, so a new machine blocks at the
@@ -97,7 +96,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    Fly's docs don't say whether one request a minute keeps a lone machine running. If it
    doesn't, restarts wake Neon again. Options: `min_machines_running = 1` (~$2/month) or
    `auto_stop_machines = "suspend"` (keeps memory). Measure once hosted; ask Saad.
-5. **Retention: IN REVIEW, PR #35** (stacked on #34;
+5. **Retention: DONE, PR #35** (
    `server/app/db/partitions.py`, ADR 0020). `maintain(conn, today, keep_days)` makes
    yesterday to +7 days and drops days before today − 7; `maintain_daily` runs in the lifespan
    (startup, then at most once per UTC day). `python -m app.db.partitions` and `make migrate`
@@ -106,7 +105,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    create a partition); pick a second owner URL just for the job or a no-argument `SECURITY
    DEFINER` function, together with where migrations run. Expired days wait for the next start
    if the app is stopped by Fly for lack of traffic.
-   **Prometheus metrics: IN REVIEW, PR #36** (stacked on #35; `server/app/core/metrics.py`, ADR
+   **Prometheus metrics: DONE, PR #36** (`server/app/core/metrics.py`, ADR
    0021). New dependency `prometheus-client` 0.26.0. Started in the lifespan when
    `Settings.metrics_port` is set (`METRICS_PORT`; set in `production.toml` `[env]` and
    compose, which maps `127.0.0.1:9091`). `[metrics]` in `production.toml`. Counting happens
@@ -177,7 +176,7 @@ to change** (switching range, filters or pages should feel instant). Both count 
    `model_requested` is reported as `azure-deployment` (ADR 0010 point 5). Not covered yet:
    `with_raw_response`/`with_streaming_response` (status and duration only), `parse()` and
    `stream()` helpers that bypass `create`, embeddings.
-4. **Anthropic integration: IN REVIEW** (`sdk/python/src/gaslit/_anthropic.py`, ADR 0011).
+4. **Anthropic integration: DONE** (`sdk/python/src/gaslit/_anthropic.py`, ADR 0011).
    `messages.create` (sync/async, streaming or not) and the `messages.stream()` helper; the
    Bedrock, Vertex and Foundry clients share the same classes. The shared wrapper and stream code
    moved from `_openai.py` to `_wrap.py`. Tested on anthropic 0.28.0, 0.50.0, 0.124.0, 1.0.0 and
@@ -187,7 +186,7 @@ to change** (switching range, filters or pages should feel instant). Both count 
    Saad confirmed the Azure and Bedrock ARN rules. Not covered, by choice for now: `beta.messages`
    (and the tool runner), `messages.parse()`. Saad is fine with the newer Bedrock Mantle,
    `AnthropicAWS` and `AnthropicGoogleCloud` hosts staying `custom`.
-5. **Examples: IN REVIEW** (`examples/`, ADR 0012). `openai_chat.py`, `anthropic_summariser.py`,
+5. **Examples: DONE** (`examples/`, ADR 0012). `openai_chat.py`, `anthropic_summariser.py`,
    `cloud_hosts.py` (Azure OpenAI, Bedrock, Vertex) and `manual_track.py`, each printing its
    payload in debug mode with no key. `_demo.offline()` starts the fake provider and sets
    `HTTP_PROXY`, so `http://api.openai.com/v1` and the like reach it with the real hostname.
@@ -212,6 +211,11 @@ source, not memory, before relying on it (brief §17).
 - Older versions: `uv run --with "anthropic==X" --with "httpx<0.28" pytest ...`.
 
 ## Loose ends
+
+- **Stacked PRs:** before deleting a merged PR's branch, retarget the next PR to `main`
+  (`gh pr edit N --base main`). Deleting a base branch through the API closes the PRs on it;
+  GitHub retargets them only when it deletes the branch itself. Happened with #35 on
+  2026-10-18 (restored the branch, reopened, retargeted).
 
 - **Security config:** `docs/security-config.md` lists every setting that keeps users'
   data safe, with status. Check it at each step. Open gap for step 8: requests to
