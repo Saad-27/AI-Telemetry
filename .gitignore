@@ -18,3 +18,5 @@ node_modules/
 tfplan
 # Local-only deployment planning notes, never committed
 docs/decisions/DEPLOYMENT_PLAN.md
+# Load-test keys (throwaway database, tools/loadtest/run.sh)
+tools/loadtest/keys.txt

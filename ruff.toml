@@ -7,3 +7,5 @@ select = ["E", "W", "F", "I", "B", "UP", "S", "SIM", "RUF"]
 
 [lint.per-file-ignores]
 "**/tests/**" = ["S101", "S603"]
+# The load generator picks test data at random and runs `docker exec` with fixed arguments.
+"tools/loadtest/**" = ["S311", "S603", "S607"]

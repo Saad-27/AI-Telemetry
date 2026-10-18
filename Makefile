@@ -2,7 +2,7 @@ SDK    := sdk/python
 SERVER := server
 PKGS   := $(SDK) $(SERVER)
 
-.PHONY: dev down db migrate dev-key test lint fmt bench
+.PHONY: dev down db migrate dev-key test lint fmt bench loadtest
 
 dev:  ## Postgres + server (with reload) on 127.0.0.1:8000
 	docker compose up --build
@@ -35,3 +35,8 @@ fmt:
 
 bench:  ## SDK call-path overhead against the budget in brief §6.8
 	cd $(SDK) && uv run python tests/bench_overhead.py
+
+# Ingest load test (docs/capacity.md). Start the stack first: tools/loadtest/run.sh up
+# e.g. make loadtest ARGS="run --keys ../tools/loadtest/keys.txt --rate 100,200,400"
+loadtest:
+	cd $(SERVER) && PYTHONPATH=.:tests uv run python ../tools/loadtest/loadtest.py $(ARGS)

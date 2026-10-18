@@ -1806,6 +1806,8 @@ Track **cost per 1,000 calls measured** every month (Section 21) so pricing for 
 
 **Record** the results in `docs/capacity.md`, including the machine sizes used. These become real interview numbers.
 
+**Done locally in M3 step 7** ([ADR 0024](docs/decisions/0024-load-test-method.md)), with our own generator (`tools/loadtest/`) instead of k6 or Locust, on containers limited like Fly `shared-cpu-1x` and Neon 0.25 CU. Rerun on Fly and Neon at step 8.
+
 ### 20.7 Design seams to build now
 
 These keep later stages from needing rewrites. Build only these seams; no other speculative abstraction.
