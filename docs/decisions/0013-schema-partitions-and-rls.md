@@ -1,6 +1,6 @@
 # 0013: First schema: day partitions, group roles and row-level security
 
-- **Status:** accepted
+- **Status:** accepted; how partitions are made in production: [0020](0020-partition-upkeep-and-retention.md)
 - **Date:** 2026-10-17
 
 ## Context

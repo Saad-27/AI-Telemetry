@@ -732,7 +732,7 @@ Cookie session auth. **Every route is scoped to projects the user is a member of
 
 - Plain Postgres with the `summary_records` and `call_samples` tables **range-partitioned by day**.
 - Create partitions ahead of time with pg_partman or a small job.
-- **Retention:** drop partitions older than the plan's retention, which is cheap and avoids vacuum churn.
+- **Retention:** drop partitions older than the plan's retention, which is cheap and avoids vacuum churn. The app does this, and creates the coming week's partitions, at startup and once a day ([ADR 0020](docs/decisions/0020-partition-upkeep-and-retention.md)).
 
 **Alternatives**
 
@@ -806,7 +806,7 @@ Adding arrays together gives exact bucket counts for any time range or group of 
 - `distinct_projects` and `max_project_share` are computed per grain. Distinct counts **are not additive**, so the API serves only those grains and does not sum smaller ones.
 - The API hides any point that fails P6 (fewer than 5 distinct projects, or one project over 50% of samples). The chart shows a gap there.
 
-**Retention job:** drops expired partitions and old rollups according to entitlements.
+**Retention job:** drops expired partitions and old rollups according to entitlements. Until this worker exists, the app runs it ([ADR 0020](docs/decisions/0020-partition-upkeep-and-retention.md)).
 
 ### 9.6 Status poller
 

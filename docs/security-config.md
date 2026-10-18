@@ -17,6 +17,7 @@ How to apply a setting is in [deploy.md](deploy.md).
 | The URL exists only as a Fly secret | Typed with `read -s`, never in shell history, the repo or logs | Runbook step 2 |
 | Login roles for the app are created **with SQL**, never in the Neon console | Console roles join `neon_superuser`, which has `BYPASSRLS`, so RLS would silently stop protecting tenants ([Neon](https://neon.com/docs/manage/roles)) | Step 8 |
 | Ingest connects as a member of `ingest_writer`, the dashboard as a member of `dashboard_app`. Only migrations and partition jobs use the owner | The owner bypasses RLS and can read every tenant's data. A bug in ingest must not be able to read anything | Step 8 and M4. **Today the app connects as the owner** |
+| Partition upkeep and retention (`app.db.partitions`) keep the table owner's rights, but the app's own role does not get them. Options: a second, owner connection string used only by the job, or a `SECURITY DEFINER` function with no arguments | Creating and dropping partitions needs the owner; giving the ingest role ownership would let a bug read every tenant's data or drop tables (ADR 0020) | Step 8, decided with where migrations run |
 | Postgres statement logging stays at Neon's default (no `log_statement = all`, no parameter logging) | Logged parameters would put customer metrics and key hashes in Neon's logs | Check at step 8 |
 | Strong generated password, rotated if it ever appears anywhere | Neon's IP allowlist is a paid-plan feature, so the endpoint is reachable from the internet; TLS plus the password are the protection | Step 8 |
 
@@ -27,6 +28,7 @@ How to apply a setting is in [deploy.md](deploy.md).
 | RLS on `summary_records` and `call_samples`; dashboard queries run in a transaction with `SET LOCAL app.project_id` | A missed `WHERE project_id = ...` cannot return another tenant's rows | **Done** in the schema (ADR 0013); takes effect with the roles above |
 | Grants only on the partitioned parents, never on partitions | RLS applies through the parent only. Direct access to a partition would skip it | **Done** |
 | `ingest_writer` cannot read data, users' details or key prefixes. It reads only `projects (id, owner_user_id, deleted_at)`, `users (id, plan)` and `monthly_usage` | A leaked or buggy ingest process cannot be used to read tenants' data | **Done**, tested (ADR 0017) |
+| Expired days are dropped automatically: summaries and samples are kept 7 to 8 days | Retention is a privacy promise (brief §7.2, §11.6) | **Done** (ADR 0020), tested. Runs while the app runs: after a spell with no traffic at all, at the next start |
 | Soft-deleting a project revokes its keys in the same transaction | Keeps the key list honest. Ingest also refuses keys of deleted projects, within 60 s (ADR 0017) | M4 |
 | Every dashboard route goes through `require_project_member`; unknown and foreign projects both return 404; IDOR suite generated from the route table | Stops one user reading another's project by guessing IDs | M4 |
 
