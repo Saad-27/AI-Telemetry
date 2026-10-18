@@ -50,6 +50,15 @@ DASHBOARD_QUERY_SECONDS = Histogram(
     ["query"],
     buckets=_LATENCY,
 )
+TOTALS_BUILDS = Counter(
+    "gaslit_totals_builds",
+    "Builds of the dashboard's 5-minute and hourly totals by this machine, by result: ok, "
+    "locked (another machine was building) or failed (ADR 0023).",
+    ["result"],
+)
+TOTALS_BUILD_SECONDS = Histogram(
+    "gaslit_totals_build_seconds", "Time to build totals, failures included.", buckets=_LATENCY
+)
 PARTITIONS_MAINTAINED = Gauge(
     "gaslit_partitions_last_success_timestamp_seconds",
     "When this machine last finished partition upkeep. Partitions run out 7 days after it.",

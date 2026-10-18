@@ -1,4 +1,5 @@
-"""Dashboard reads: sums, ranges, steps, filters and tenants (ADR 0022), and percentiles."""
+"""Dashboard reads: sums, ranges, steps, filters and tenants (ADR 0022), from summaries and from
+totals (ADR 0023), and percentiles."""
 
 import uuid
 from collections.abc import AsyncIterator
@@ -10,8 +11,17 @@ import pytest
 from prometheus_client import REGISTRY
 from records import envelope, now_ms, summary
 
-from app.dashboard.repository import Filters, MetricsRepository, ModelSums, Sums, quantile
+from app.dashboard.repository import (
+    Filters,
+    MetricsRepository,
+    ModelSums,
+    Sums,
+    _bounds,
+    quantile,
+)
 from app.db.partitions import ensure_partitions
+from app.db.totals import FIVE_MINUTES, build
+from app.db.totals import HOUR as ONE_HOUR
 from app.ingest.schema import (
     DECODE_BOUNDS_TPS,
     DECODE_BUCKETS,
@@ -104,6 +114,29 @@ def test_no_quantile_from_under_20_values() -> None:
     assert quantile([0] * LATENCY_BUCKETS, LATENCY_BOUNDS_MS, 0.5) is None
 
 
+# Which pieces a range is read from
+
+
+def test_bounds_use_the_coarsest_totals_that_fit() -> None:
+    t = HOUR + 2 * MINUTE  # an edge inside a 5-minute bucket
+    both = (FIVE_MINUTES, ONE_HOUR)
+    end = t + 3 * ONE_HOUR
+
+    def pieces(built: datetime, grains: tuple[timedelta, ...] = both) -> list[timedelta]:
+        """Each piece's length: summaries, 5-minute, hourly, 5-minute, summaries."""
+        b = _bounds(t, end, built, grains)
+        return [b[i + 1] - b[i] for i in range(0, 10, 2)]
+
+    m = MINUTE
+    # Totals built through the end: summaries only at the edges.
+    assert pieces(end) == [3 * m, 55 * m, 2 * ONE_HOUR, 0 * m, 2 * m]
+    # Built through 45 minutes past the second hour: summaries after that.
+    assert pieces(HOUR + 2 * ONE_HOUR + 45 * m) == [3 * m, 55 * m, ONE_HOUR, 45 * m, 17 * m]
+    assert pieces(HOUR) == [0 * m, 0 * m, 0 * m, 0 * m, 3 * ONE_HOUR]  # nothing built yet
+    assert pieces(end, (FIVE_MINUTES,)) == [3 * m, 175 * m, 0 * m, 0 * m, 2 * m]
+    assert pieces(end, ()) == [0 * m, 0 * m, 0 * m, 0 * m, 3 * ONE_HOUR]  # 1-minute steps
+
+
 # Reads from Postgres, as dashboard_app
 
 
@@ -116,6 +149,20 @@ async def owner_pool(database_url: str) -> AsyncIterator[asyncpg.Pool]:
         yield pool
     finally:
         await pool.close()
+
+
+@pytest.fixture(params=[False, True], ids=["from-summaries", "from-totals"])
+def built(request: pytest.FixtureRequest) -> bool:
+    return bool(request.param)
+
+
+async def settle(pool: asyncpg.Pool, built: bool) -> None:
+    """Totals built from an hour before HOUR to now, or none from then, so reads take the
+    tests' data from totals or from summaries. Either way the answers are the same."""
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE totals_watermark SET built_through = $1", HOUR - ONE_HOUR)
+        if built:
+            assert await build(conn, datetime.now(UTC)) is not None
 
 
 @pytest.fixture
@@ -135,7 +182,7 @@ async def repo(database_url: str) -> AsyncIterator[MetricsRepository]:
 @pytest.mark.db
 @pytest.mark.anyio
 async def test_overview_sums_every_process_and_minute(
-    owner_pool: asyncpg.Pool, repo: MetricsRepository
+    owner_pool: asyncpg.Pool, repo: MetricsRepository, built: bool
 ) -> None:
     project = uuid.uuid4()
     gpt = {"provider": "openai", "endpoint_host": "api.openai.com", "model": "gpt-x"}
@@ -149,6 +196,7 @@ async def test_overview_sums_every_process_and_minute(
         calls(60, 100),  # at the end of the range: not included
     )
     await store(owner_pool, uuid.uuid4(), calls(0, 1000))  # another project
+    await settle(owner_pool, built)
     rows = await repo.overview(project, HOUR, HOUR + 60 * MINUTE)
     assert sorted(rows, key=lambda r: r.model) == [
         # Defaults from records.summary(): anthropic, direct, claude-sonnet-x-20260801.
@@ -162,7 +210,7 @@ async def test_overview_sums_every_process_and_minute(
 @pytest.mark.db
 @pytest.mark.anyio
 async def test_series_steps_and_input_buckets(
-    owner_pool: asyncpg.Pool, repo: MetricsRepository
+    owner_pool: asyncpg.Pool, repo: MetricsRepository, built: bool
 ) -> None:
     project = uuid.uuid4()
     await store(
@@ -174,6 +222,7 @@ async def test_series_steps_and_input_buckets(
         calls(5, 8),
         calls(59, 16),
     )
+    await settle(owner_pool, built)
     points = await repo.series(project, HOUR, HOUR + 60 * MINUTE, 5 * MINUTE)
     assert [(p.start - HOUR, p.input_bucket, p.sums.count) for p in points] == [
         (0 * MINUTE, "l", 4),
@@ -190,7 +239,7 @@ async def test_series_steps_and_input_buckets(
 
 @pytest.mark.db
 @pytest.mark.anyio
-async def test_filters(owner_pool: asyncpg.Pool, repo: MetricsRepository) -> None:
+async def test_filters(owner_pool: asyncpg.Pool, repo: MetricsRepository, built: bool) -> None:
     project = uuid.uuid4()
     await store(
         owner_pool,
@@ -202,10 +251,10 @@ async def test_filters(owner_pool: asyncpg.Pool, repo: MetricsRepository) -> Non
         calls(0, 16, route="bedrock", endpoint_host=None, endpoint_region="eu-central-1"),
         calls(0, 32, model="claude-haiku-x"),
     )
-    end = HOUR + MINUTE
+    await settle(owner_pool, built)
 
     async def total(**filters: str) -> int:
-        rows = await repo.overview(project, HOUR, end, Filters(**filters))
+        rows = await repo.overview(project, HOUR, HOUR + ONE_HOUR, Filters(**filters))
         return sum(r.sums.count for r in rows)
 
     assert await total() == 63
@@ -215,7 +264,9 @@ async def test_filters(owner_pool: asyncpg.Pool, repo: MetricsRepository) -> Non
     assert await total(route="bedrock") == 16
     assert await total(provider="openai") == 0
     assert await total(model="claude-haiku-x", route="direct") == 32
-    points = await repo.series(project, HOUR, end, MINUTE, Filters(model="claude-haiku-x"))
+    points = await repo.series(
+        project, HOUR, HOUR + MINUTE, MINUTE, Filters(model="claude-haiku-x")
+    )
     assert [p.sums.count for p in points] == [32]
 
 

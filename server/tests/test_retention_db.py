@@ -18,6 +18,7 @@ from app.db.partitions import (
     ensure_partitions,
     maintain,
     partition_name,
+    retention,
 )
 from app.main import create_app
 
@@ -25,6 +26,8 @@ pytestmark = pytest.mark.db
 
 # Long past, so the current partitions other tests use are never touched.
 DAY = date(2001, 3, 10)
+NOON = datetime(2001, 3, 10, 12, tzinfo=UTC)
+TIDY = dict.fromkeys(PARTITIONED, DAY + timedelta(days=13))  # drops every day these tests make
 
 
 @pytest.fixture
@@ -45,8 +48,17 @@ async def existing(conn: asyncpg.Connection) -> set[str]:
     return {r["relname"] for r in rows}
 
 
-def names(*days: date) -> set[str]:
-    return {partition_name(table, day) for table in PARTITIONED for day in days}
+def names(*days: date, tables: tuple[str, ...] = tuple(PARTITIONED)) -> set[str]:
+    return {partition_name(table, day) for table in tables for day in days}
+
+
+def days(first: int, last: int) -> list[date]:
+    """DAY + first to DAY + last days, both included."""
+    return [DAY + timedelta(days=i) for i in range(first, last + 1)]
+
+
+DETAIL = ("summary_records", "totals_5m")
+KEPT = ("call_samples", "totals_1h")
 
 
 @pytest.mark.anyio
@@ -56,18 +68,30 @@ async def test_days_past_retention_are_dropped(conn: asyncpg.Connection) -> None
         "CREATE TABLE summary_records_p2001_old PARTITION OF summary_records "
         "FOR VALUES FROM ('2001-01-01T00:00:00+00') TO ('2001-01-02T00:00:00+00')"
     )
-    old = [DAY - timedelta(days=9), DAY - timedelta(days=8)]  # Mar 1 and 2: all rows over 7 days
-    kept = [DAY - timedelta(days=7) + timedelta(days=i) for i in range(9)]  # Mar 3 to Mar 11
 
-    dropped = await drop_expired(conn, DAY, keep_days=7)
+    # Totals are built through today, so only the retention decides.
+    dropped = await drop_expired(conn, retention(DAY, 7, built=NOON))
 
-    assert set(dropped) == names(*old)
+    # Samples and hourly totals: Mar 1 and 2 hold only rows over 7 days old. Summaries and
+    # 5-minute totals: everything before Mar 8, two days before.
+    old = names(*days(-9, -8), tables=KEPT) | names(*days(-9, -3), tables=DETAIL)
+    assert set(dropped) == old
     left = await existing(conn)
-    assert not names(*old) & left
-    assert names(*kept) <= left
+    assert not old & left
+    assert names(*days(-7, 1), tables=KEPT) | names(*days(-2, 1), tables=DETAIL) <= left
     assert "summary_records_p2001_old" in left  # not named like ours: left alone
     await conn.execute("DROP TABLE summary_records_p2001_old")
-    await drop_expired(conn, DAY + timedelta(days=20), keep_days=7)  # tidy up
+    await drop_expired(conn, TIDY)
+
+
+@pytest.mark.anyio
+async def test_summaries_not_yet_in_totals_are_kept(conn: asyncpg.Connection) -> None:
+    await ensure_partitions(conn, DAY - timedelta(days=5), days_ahead=0)  # Mar 4 and 5
+    built = NOON - timedelta(days=6)  # Mar 4: no build since then
+    dropped = await drop_expired(conn, retention(DAY, 7, built))
+    assert not set(dropped) & names(*days(-6, -5), tables=("summary_records",))
+    assert names(*days(-6, -5), tables=("totals_5m",)) <= set(dropped)
+    await drop_expired(conn, TIDY)
 
 
 @pytest.mark.anyio
@@ -75,16 +99,16 @@ async def test_one_machine_at_a_time(conn: asyncpg.Connection, database_url: str
     other = await asyncpg.connect(database_url)
     try:
         await other.execute("SELECT pg_advisory_lock(20020)")  # another machine is at it
-        assert not await maintain(conn, DAY, keep_days=7)
+        assert not await maintain(conn, NOON, keep_days=7)
         assert not names(DAY) & await existing(conn)
         await other.execute("SELECT pg_advisory_unlock(20020)")
-        assert await maintain(conn, DAY, keep_days=7)
+        assert await maintain(conn, NOON, keep_days=7)
         assert names(DAY, DAY + timedelta(days=DAYS_AHEAD)) <= await existing(conn)
         # The lock was released: the other machine gets it now.
         assert await other.fetchval("SELECT pg_try_advisory_lock(20020)")
     finally:
         await other.close()
-    await drop_expired(conn, DAY + timedelta(days=20), keep_days=7)
+    await drop_expired(conn, TIDY)
 
 
 def test_the_app_makes_partitions_when_it_starts(database_url: str) -> None:

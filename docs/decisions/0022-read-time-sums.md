@@ -1,6 +1,6 @@
 # 0022: Dashboard reads: one sum per histogram bucket, behind a repository
 
-- **Status:** accepted. The latency target and the 7-day fix below are **proposed**, for Saad
+- **Status:** accepted. The 7-day problem below is solved by [0023](0023-tiered-totals.md) (5-minute and hourly totals); the latency target is still **proposed**
 - **Date:** 2026-10-18
 
 ## Context
@@ -75,7 +75,7 @@ p95 on the server**, for any range, for the busiest account the load test models
 production database size (0.25 CU). ADR 0008's 300 ms remains the point where pre-summed data
 must be added. Step 7 measures it.
 
-## Open: 7-day reads for busy accounts (Saad to decide)
+## 7-day reads for busy accounts (decided in 0023)
 Read-time sums meet the target for 1 hour and 24 hours. They miss it for 7 days for any
 account that sends summaries most minutes: 107 ms typical and ~650 ms busy, locally; with less
 than one core, Neon is likely slower. The brief's `rollups_1m` would not fix it: a 7-day chart

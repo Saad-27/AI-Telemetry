@@ -1,15 +1,15 @@
-"""Day partitions for the append-only data tables, and retention (brief §9.4, ADR 0013, ADR 0020).
+"""Day partitions for the data tables, and retention (brief §9.4, ADR 0013, ADR 0020, ADR 0023).
 
 `maintain` creates the partitions for yesterday through DAYS_AHEAD days from now, so a missed
-run is harmless for a week, and drops the days past retention. The app runs it at startup and
-once each UTC day (`maintain_daily`). By hand, as the schema owner: `python -m app.db.partitions`
-(`make migrate` does).
+run is harmless for a week, builds the dashboard's totals, and drops the days past retention.
+The app runs it at startup and once each UTC day (`maintain_daily`). By hand, as the schema
+owner: `python -m app.db.partitions` (`make migrate` does).
 """
 
 import asyncio
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from datetime import UTC, date, datetime, timedelta
 
@@ -19,11 +19,17 @@ from app.core.config import load_settings
 from app.core.entitlements import longest_retention_days
 from app.core.metrics import PARTITIONS_MAINTAINED
 from app.db import DB_TIMEOUT_S
+from app.db.totals import DETAIL_DAYS, build, built_through
 
 log = logging.getLogger(__name__)
 
 # Partitioned table -> its partition key column.
-PARTITIONED = {"summary_records": "minute", "call_samples": "ts"}
+PARTITIONED = {
+    "summary_records": "minute",
+    "call_samples": "ts",
+    "totals_5m": "bucket",
+    "totals_1h": "bucket",
+}
 DAYS_AHEAD = 7
 CHECK_S = 3600.0  # how often the app checks whether a new UTC day has begun
 # Creating or dropping a partition locks its parent table, which queues inserts behind it.
@@ -62,13 +68,11 @@ async def ensure_partitions(
                 )
 
 
-async def drop_expired(conn: asyncpg.Connection, today: date, keep_days: int) -> list[str]:
-    """Drops the partitions of days before `today - keep_days`, whose rows are all at least
-    `keep_days` days old, and returns their names. Rows are kept for between `keep_days` and
-    `keep_days + 1` days. Partitions named otherwise are left alone."""
-    cutoff = today - timedelta(days=keep_days)
+async def drop_expired(conn: asyncpg.Connection, before: Mapping[str, date]) -> list[str]:
+    """Drops each table's partitions of the days before `before[table]` and returns their names.
+    Partitions named otherwise are left alone."""
     dropped = []
-    for table in PARTITIONED:
+    for table, cutoff in before.items():
         rows = await conn.fetch(
             "SELECT c.relname FROM pg_inherits i JOIN pg_class c ON c.oid = i.inhrelid "
             "WHERE i.inhparent = $1::regclass",
@@ -84,40 +88,62 @@ async def drop_expired(conn: asyncpg.Connection, today: date, keep_days: int) ->
     return dropped
 
 
-async def maintain(conn: asyncpg.Connection, today: date, keep_days: int) -> bool:
-    """Creates the coming days' partitions and drops expired ones. False if another
-    connection holds the job's advisory lock, that is another machine is already at it."""
+def retention(today: date, keep_days: int, built: datetime) -> dict[str, date]:
+    """The first day kept, per table. On day D, days before D - keep are dropped, so rows live
+    between keep and keep + 1 days: `keep_days` (the longest plan's) for samples and hourly
+    totals, DETAIL_DAYS for per-minute summaries and 5-minute totals (ADR 0023). Summaries not
+    yet in totals are never dropped."""
+    detail = today - timedelta(days=DETAIL_DAYS)
+    kept = today - timedelta(days=keep_days)
+    return {
+        "summary_records": min(detail, built.date()),
+        "totals_5m": detail,
+        "totals_1h": kept,
+        "call_samples": kept,
+    }
+
+
+async def maintain(conn: asyncpg.Connection, now: datetime, keep_days: int) -> bool:
+    """Creates the coming days' partitions, builds totals and drops expired days. False if
+    another connection holds the job's advisory lock, that is another machine is at it."""
     if not await conn.fetchval("SELECT pg_try_advisory_lock($1)", _ADVISORY_LOCK):
         return False
     try:
         await conn.execute(f"SET lock_timeout = '{LOCK_TIMEOUT}'")
+        today = now.date()
         await ensure_partitions(conn, today)
-        dropped = await drop_expired(conn, today, keep_days)
+        # After more than a day without a build (every machine stopped), the days still to
+        # build need totals partitions too.
+        built = await built_through(conn)
+        if (gap := (today - built.date()).days) > 1:
+            await ensure_partitions(conn, built.date() + timedelta(days=1), days_ahead=gap - 1)
+        built = await build(conn, now, catch_up=True) or built  # None: another machine is
+        dropped = await drop_expired(conn, retention(today, keep_days, built))
     finally:
         await conn.execute("SELECT pg_advisory_unlock($1)", _ADVISORY_LOCK)
     log.info("partitions: maintained for %s, dropped %s", today, ", ".join(dropped) or "none")
     return True
 
 
-def _utc_today() -> date:
-    return datetime.now(UTC).date()
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 async def maintain_daily(
     pool: asyncpg.Pool,
     keep_days: int,
     check_s: float = CHECK_S,
-    today: Callable[[], date] = _utc_today,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> None:
     """Runs `maintain` now, then whenever a new UTC day has begun. At most one run a day, so
     an idle database is woken at most once a day. A failed run is retried at the next check."""
     done: date | None = None
     while True:
-        day = today()
-        if day != done:
+        now = clock()
+        if (day := now.date()) != done:
             try:
                 async with pool.acquire(timeout=DB_TIMEOUT_S) as conn:
-                    if await maintain(conn, day, keep_days):
+                    if await maintain(conn, now, keep_days):
                         PARTITIONS_MAINTAINED.set_to_current_time()
                 done = day
             except Exception as exc:
@@ -129,7 +155,7 @@ async def maintain_daily(
 async def _main() -> None:
     conn = await asyncpg.connect(load_settings().database_url)
     try:
-        await maintain(conn, _utc_today(), longest_retention_days())
+        await maintain(conn, _utc_now(), longest_retention_days())
     finally:
         await conn.close()
 

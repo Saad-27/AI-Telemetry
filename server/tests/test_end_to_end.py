@@ -2,7 +2,8 @@
 
 Every example in examples/ runs in the SDK's own environment and sends to this app, served by
 uvicorn on a free port, over real HTTP. Debug mode prints exactly what was sent, so the test
-knows what to expect: every record stored, and the dashboard's sums equal to the payloads'.
+knows what to expect: every record stored, and the dashboard's sums equal to the payloads',
+read from the summaries and again from built totals (ADR 0023).
 A record the server refuses (an enum or host copy that drifted from the SDK's) is missing.
 `test_server_accepts_what_the_sdk_can_send` compares those copies directly.
 """
@@ -27,6 +28,7 @@ import uvicorn
 from app.core.config import Settings
 from app.dashboard.repository import Filters, MetricsRepository, Sums
 from app.db.partitions import ensure_partitions
+from app.db.totals import FIVE_MINUTES, HOUR, build, built_through, ceil, floor
 from app.ingest.keys import generate
 from app.ingest.schema import DECODE_BOUNDS_TPS, LATENCY_BOUNDS_MS, Provider, Route, Series
 from app.main import create_app
@@ -161,12 +163,17 @@ def total(summaries: list[Record]) -> Sums:
 def group(summaries: list[Record], *keys: str) -> dict[tuple[Any, ...], Sums]:
     groups: defaultdict[tuple[Any, ...], list[Record]] = defaultdict(list)
     for s in summaries:
-        groups[tuple(minute(s) if k == "minute" else s["series"][k] for k in keys)].append(s)
+        when = {"minute": minute, "five_minutes": five_minutes}
+        groups[tuple(when[k](s) if k in when else s["series"][k] for k in keys)].append(s)
     return {k: total(v) for k, v in groups.items()}
 
 
 def minute(s: Record) -> datetime:
     return datetime.fromtimestamp(s["minute"] / 1000, UTC)
+
+
+def five_minutes(s: Record) -> datetime:
+    return floor(minute(s), FIVE_MINUTES)
 
 
 def span(summaries: list[Record]) -> tuple[datetime, datetime]:
@@ -235,6 +242,34 @@ async def test_series_equal_the_payloads(
         assert {(p.start, p.input_bucket): p.sums for p in points} == group(
             mine, "minute", "input_bucket"
         )
+
+
+@pytest.mark.db
+@pytest.mark.anyio
+async def test_sums_are_the_same_from_totals(
+    sent: tuple[UUID, list[Record], list[Record]], repo: MetricsRepository, database_url: str
+) -> None:
+    project, summaries, _ = sent
+    first, last = span(summaries)
+    start, end = floor(first, HOUR), ceil(last, FIVE_MINUTES)
+    conn = await asyncpg.connect(database_url)
+    try:
+        before = await built_through(conn)
+        # Built as if 10 minutes later, so the examples' buckets are built too.
+        await conn.execute("UPDATE totals_watermark SET built_through = $1", start)
+        await build(conn, end + 10 * timedelta(minutes=1))
+        rows = await repo.overview(project, start, end)
+        assert {(r.provider, r.route, r.model): r.sums for r in rows} == group(
+            summaries, "provider", "route", "model"
+        )
+        points = await repo.series(project, start, end, FIVE_MINUTES)
+        assert {(p.start, p.input_bucket): p.sums for p in points} == group(
+            summaries, "five_minutes", "input_bucket"
+        )
+    finally:
+        # Back to what is really built: the buckets built early are rebuilt in due course.
+        await conn.execute("UPDATE totals_watermark SET built_through = $1", before)
+        await conn.close()
 
 
 # Checked against the SDK's own tables, so a host or enum added there must be added here.

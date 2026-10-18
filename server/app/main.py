@@ -12,6 +12,7 @@ from app.core.config import Settings, load_settings
 from app.core.entitlements import longest_retention_days
 from app.db import DB_TIMEOUT_S
 from app.db.partitions import maintain_daily
+from app.db.totals import Totals
 from app.ingest.keys import KeyStore
 from app.ingest.limits import Quota, RateLimiter
 from app.ingest.routes import router as ingest_router
@@ -37,7 +38,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.keys = KeyStore(app.state.pool, keep=quota.blocks, learn=quota.learn)
         app.state.sink = PostgresSink(app.state.pool)
         app.state.rate = RateLimiter()
+        # The dashboard's totals, built while this machine receives summaries (ADR 0023).
+        totals = app.state.totals = Totals(app.state.pool)
         flusher = asyncio.create_task(quota.flush_every())
+        builder = asyncio.create_task(totals.build_every())
         # Partitions and retention, at startup and then once a day (ADR 0020). In the
         # background, so the app starts even while the database is down.
         upkeep = asyncio.create_task(maintain_daily(app.state.pool, longest_retention_days()))
@@ -48,7 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
-            for task in (flusher, upkeep):
+            for task in (flusher, builder, upkeep):
                 task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task
