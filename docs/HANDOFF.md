@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-18 (M3 steps 1-4 merged; blocked-accounts fix and step 5 retention in review)
+**Last updated:** 2026-10-18 (M3 steps 1-4 merged; blocked-accounts fix and all of step 5 in review)
 
 ## Where the project is
 
@@ -20,8 +20,9 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
 - **In progress: M3** (ingest and storage), plan below. Steps 1-4 are merged; the
-  blocked-accounts fix and step 5's retention are in review (stacked PRs); step 5's metrics
-  are next. Hosting is the last step; confirm costs with Saad first.
+  blocked-accounts fix (#34) and step 5 (retention #35, metrics #36) are in review as stacked
+  PRs, to merge in that order. Step 6 is next. Hosting is the last step; confirm costs with
+  Saad first.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -42,6 +43,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0018 | SDK error samples: the first 3 of each error class per minute per process (was up to 100 a minute); the rest only counted. A capped error doesn't use up its series' `first_of_series` sample. No wire change |
 | 0019 | Accounts over quota are answered from memory: an expired cached key is kept while its account is blocked, so SDKs' checks every minute never reach the database. The key lookup also returns this month's usage, so a new machine blocks at once. `Quota.unblock(user_id)` is for the upgrade flow, which must call it on every ingest machine |
 | 0020 | Partition upkeep and retention run inside the app: at startup, then once per UTC day (hourly date check), under an advisory lock, `lock_timeout` 1 s. Days before today − `longest_retention_days()` are dropped, so rows live 7-8 days. Needs the table owner: how, once the app stops being the owner, is a step 8 decision |
+| 0021 | Prometheus metrics with `prometheus_client` on their own port (`METRICS_PORT`, 9091), scraped by Fly into its free Prometheus/Grafana; never on the public port; labels fixed codes only. Requests by status and reason, latency, records, batch size, insert time, key lookups that reach the DB, quota flushes, last partition run |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -85,7 +87,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    invalid keys moved to step 8 (needs a trusted client IP).
    **SDK error-sample cap: DONE, PR #33** (ADR 0018): the first 3 errors of each class per
    minute per process; the rest are only counted.
-   **Blocked accounts from memory: IN REVIEW** (branch `m3-blocked-accounts`, ADR 0019; Saad
+   **Blocked accounts from memory: IN REVIEW, PR #34** (branch `m3-blocked-accounts`, ADR 0019; Saad
    approved the fix 2026-10-18). `KeyStore(pool, keep=quota.blocks, learn=quota.learn)`: an
    expired key whose account is over quota is still served, so its 429s need no database. The
    key lookup left-joins `monthly_usage` for this UTC month, so a new machine blocks at the
@@ -95,7 +97,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    Fly's docs don't say whether one request a minute keeps a lone machine running. If it
    doesn't, restarts wake Neon again. Options: `min_machines_running = 1` (~$2/month) or
    `auto_stop_machines = "suspend"` (keeps memory). Measure once hosted; ask Saad.
-5. **Retention: IN REVIEW** (branch `m3-retention`, stacked on `m3-blocked-accounts`;
+5. **Retention: IN REVIEW, PR #35** (stacked on #34;
    `server/app/db/partitions.py`, ADR 0020). `maintain(conn, today, keep_days)` makes
    yesterday to +7 days and drops days before today − 7; `maintain_daily` runs in the lifespan
    (startup, then at most once per UTC day). `python -m app.db.partitions` and `make migrate`
@@ -104,8 +106,16 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    create a partition); pick a second owner URL just for the job or a no-argument `SECURITY
    DEFINER` function, together with where migrations run. Expired days wait for the next start
    if the app is stopped by Fly for lack of traffic.
-   **Prometheus metrics: next** (including quota and rate-limit rejections, brief §9.10, and
-   the last successful partition run, so an alert fires long before partitions run out).
+   **Prometheus metrics: IN REVIEW, PR #36** (stacked on #35; `server/app/core/metrics.py`, ADR
+   0021). New dependency `prometheus-client` 0.26.0. Started in the lifespan when
+   `Settings.metrics_port` is set (`METRICS_PORT`; set in `production.toml` `[env]` and
+   compose, which maps `127.0.0.1:9091`). `[metrics]` in `production.toml`. Counting happens
+   in `routes._done` (every answer), after a successful insert (records, batch size), in
+   `KeyStore.resolve` (DB lookups), `Quota.flush` and `maintain_daily`. Tests read
+   `prometheus_client.REGISTRY` deltas; only one test starts the metrics server (stopping it
+   takes 0.5 s). ~7 µs per accepted request. **At hosting:** set the Grafana alerts listed in
+   `deploy.md` step 2; check whether Fly's scrapes keep a machine running. Dashboard query
+   latency comes with step 6.
 6. **Read-time sums** (repository layer) and the end-to-end test: example app → rows → sums
    (also catches the server's enum and host copies drifting from the SDK's).
 7. **Load test**, results in `docs/capacity.md`.
@@ -213,7 +223,10 @@ source, not memory, before relying on it (brief §17).
 - Neon connection strings include `channel_binding=require`; asyncpg forwards it to Postgres,
   which rejects it. Remove it from `DATABASE_URL` (runbook step 2).
 - `make test` needs Docker for the server's database tests. Cloud sessions have no Docker: run
-  `uv run pytest` in `sdk/python`, and in `server` with `-m "not db"`.
+  `uv run pytest` in `sdk/python`, and in `server` with `-m "not db"`. On 2026-10-18 `docker`
+  was not on the WSL path (Docker Desktop not running or its WSL integration off), so the DB
+  tests ran against a portable Postgres 17.10 in the session scratchpad, with `DATABASE_URL`
+  set (`make db` then skips compose).
 - The server makes partitions at startup and daily (ADR 0020), so the dev database no longer
   runs out a week after `make migrate`.
 - Starlette's `TestClient` uses `httpx2` (the dev dependency), not `httpx`.

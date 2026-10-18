@@ -17,6 +17,7 @@ from uuid import UUID
 
 import asyncpg
 
+from app.core.metrics import KEY_LOOKUPS
 from app.db import DB_TIMEOUT_S
 
 PREFIX = "gl_live_"
@@ -147,6 +148,7 @@ class KeyStore:
             return cached[1]
         async with self._pool.acquire(timeout=DB_TIMEOUT_S) as conn:
             row = await conn.fetchrow(_TOUCH, key_hash, timeout=DB_TIMEOUT_S)
+        KEY_LOOKUPS.labels("missing" if row is None else "found").inc()
         self._cache.pop(key_hash, None)
         if row is None:
             return None

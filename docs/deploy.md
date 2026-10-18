@@ -84,7 +84,9 @@ to a minimum and maximum of **0.25 CU**, and leave scale-to-zero on. On the paid
 then costs at most about $19.35 a month ($0.106 per CU-hour × 730 hours), however much traffic
 arrives. Past its capacity, ingest slows and returns 503, and SDKs retry or drop. Storage, the
 other cost, is bounded by `entitlements()` ([ADR 0017](decisions/0017-rate-limit-and-quota.md)).
-Raise the size only when the load test or production metrics show it is needed.
+Raise the size only when the load test or production metrics show it is needed. Metrics are in
+Fly's Grafana at fly-metrics.net once the app is deployed (ADR 0021): set alerts there for no
+successful partition run in 2 days, 503s, quota flush failures and p95 latency over 200 ms.
 
 **Fly:** install `flyctl` and run `fly auth login`, then:
 

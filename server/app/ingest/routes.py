@@ -4,6 +4,7 @@ Cheapest checks first: headers, then the key (format and checksum before any dat
 then the quota and rate limit (from memory, ADR 0017), then the body under hard size caps, then
 validation, then one insert per record type.
 Logs never include bodies, keys, headers or driver error text: only codes, counts and types.
+Every answer is counted in the metrics by status and reason code (ADR 0021).
 """
 
 import logging
@@ -17,6 +18,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.core.entitlements import entitlements
+from app.core.metrics import BATCH_RECORDS, INSERT_SECONDS, RECORDS, REQUEST_SECONDS, REQUESTS
 from app.ingest.schema import Envelope, validate_records
 
 log = logging.getLogger(__name__)
@@ -30,6 +32,12 @@ RETRY_AFTER_S = "5"
 # resumes sending at its next check once the upgrade flow calls Quota.unblock. Each check is
 # answered from memory, with no key lookup (ADR 0019).
 QUOTA_RETRY_AFTER_S = 60
+# Bound once: looking a labelled child up costs about a microsecond each time.
+_RECORDS = {
+    (kind, outcome): RECORDS.labels(kind, outcome)
+    for kind in ("summary", "sample")
+    for outcome in ("accepted", "rejected")
+}
 
 
 @router.post("/v1/ingest")
@@ -85,9 +93,20 @@ async def ingest(request: Request) -> JSONResponse:
 
     records = validate_records(envelope, now_ms=time.time_ns() // 1_000_000)
     try:
-        await state.sink.write(found.project_id, records.summaries, records.samples)
+        with INSERT_SECONDS.time():
+            await state.sink.write(found.project_id, records.summaries, records.samples)
     except Exception as exc:
         return _unavailable(started, exc)
+    # Counted only once stored, like the response, so a retried batch is counted once.
+    BATCH_RECORDS.observe(sent)
+    for kind, got, valid in (
+        ("summary", envelope.summaries, records.summaries),
+        ("sample", envelope.samples, records.samples),
+    ):
+        if valid:
+            _RECORDS[kind, "accepted"].inc(len(valid))
+        if len(got) > len(valid):
+            _RECORDS[kind, "rejected"].inc(len(got) - len(valid))
     accepted = len(records.summaries) + len(records.samples)
     state.quota.add(found.user_id, sum(s.count for s in records.summaries), accepted)
     log.info(
@@ -95,7 +114,7 @@ async def ingest(request: Request) -> JSONResponse:
         found.project_id,
         accepted,
         records.rejected,
-        _ms(started),
+        _done(started, 202, "accepted"),
     )
     return JSONResponse(
         {"accepted": accepted, "rejected": records.rejected, "errors": records.errors},
@@ -135,14 +154,18 @@ def _seconds(wait: float) -> str:
     return str(max(1, math.ceil(wait)))
 
 
-def _ms(started: float) -> float:
-    return (time.perf_counter() - started) * 1000
+def _done(started: float, status: int, reason: str) -> float:
+    """Counts the answer in the metrics; returns the milliseconds taken, for the log line."""
+    seconds = time.perf_counter() - started
+    REQUESTS.labels(str(status), reason).inc()
+    REQUEST_SECONDS.observe(seconds)
+    return seconds * 1000
 
 
 def _reply(
     started: float, status: int, code: str, headers: dict[str, str] | None = None
 ) -> JSONResponse:
-    log.info("ingest %d %s ms=%.1f", status, code, _ms(started))
+    log.info("ingest %d %s ms=%.1f", status, code, _done(started, status, code))
     return JSONResponse({"error": code}, status_code=status, headers=headers)
 
 

@@ -11,6 +11,16 @@ primary_region = "fra" # D12: EU-hosted
   # Relative to the directory passed to `fly deploy` (server/), which is also the build context.
   dockerfile = "Dockerfile"
 
+[env]
+  METRICS_PORT = "9091"
+
+# Prometheus metrics (ADR 0021). Fly scrapes this port every 15 s over its private network
+# into its managed Prometheus, with Grafana at fly-metrics.net (free, checked 2026-10-18). The
+# port is not in [http_service], so it is never reachable from the internet.
+[metrics]
+  port = 9091
+  path = "/metrics"
+
 # Added in M3, when Alembic exists: migrations run once per deploy, before new machines start.
 # [deploy]
 #   release_command = "alembic upgrade head"

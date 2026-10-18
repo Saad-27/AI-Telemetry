@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime
 from typing import Any, NoReturn
 
 import pytest
+from prometheus_client import REGISTRY
 
 from app.core.entitlements import FREE, entitlements
 from app.ingest.keys import IngestKey
@@ -125,11 +126,16 @@ def test_blocks_reads_the_keys_plan_and_unblock_forgets() -> None:
 
 
 async def test_failed_flush_keeps_the_counts() -> None:
+    def failures() -> float:
+        return REGISTRY.get_sample_value("gaslit_quota_flushes_total", {"result": "failed"}) or 0
+
+    before = failures()
     quota = Quota(Down(), clock=lambda: at(2026, 10, 17))
     await quota.flush()  # nothing pending: no connection attempted
     quota.add(KEY, 60, 100)
     with pytest.raises(ConnectionRefusedError):
         await quota.flush()
+    assert failures() - before == 1
     quota.add(KEY, 39, 49)
     assert quota.wait_s(KEY, LIMITS) == 0  # 99 calls, 149 records
     quota.add(KEY, 0, 1)

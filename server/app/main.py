@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager, suppress
 import asyncpg
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from prometheus_client import start_http_server
 
 from app.core.config import Settings, load_settings
 from app.core.entitlements import longest_retention_days
@@ -40,6 +41,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Partitions and retention, at startup and then once a day (ADR 0020). In the
         # background, so the app starts even while the database is down.
         upkeep = asyncio.create_task(maintain_daily(app.state.pool, longest_retention_days()))
+        # Fly scrapes this port over its private network; it is not in [http_service], so it
+        # is never public. A thread, so a scrape never waits for the event loop.
+        port = settings.metrics_port
+        metrics = app.state.metrics = start_http_server(port) if port is not None else None
         try:
             yield
         finally:
@@ -49,6 +54,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     await task
             await quota.flush_logged()  # Fly stops idle machines; keep their counts
             await app.state.pool.close()
+            if metrics is not None:
+                server, thread = metrics
+                server.shutdown()
+                server.server_close()
+                thread.join()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.include_router(ingest_router)
