@@ -43,6 +43,7 @@ MODELS = ("claude-sonnet-x-20260801", "claude-haiku-x-20260801", "claude-opus-x-
 SERVICES = ("api", "worker", "summariser")
 SUMMARIES_PER_MINUTE = 4  # series an app process has; one batch a minute carries them
 BATCHES_PER_MINUTE = 12  # the SDK sends every 5 s when it has samples
+JUNK_ACCOUNTS = 10  # junk comes from a few accounts of its own, as from an abuser
 
 
 # Request bodies ------------------------------------------------------------------------------
@@ -196,11 +197,13 @@ async def _send_all(
     results: list[Result] = []
     pending: set[asyncio.Task[None]] = set()
 
+    junk_keys, keys = keys[-JUNK_ACCOUNTS:], keys[:-JUNK_ACCOUNTS]
+
     def body(kind: str) -> tuple[str, bytes, int]:
         if kind == "large":
             return random.choice(keys), *large_body()
         if kind == "junk":
-            return random.choice(keys), random.choice(junk), 0
+            return random.choice(junk_keys), random.choice(junk), 0
         data, records = normal_body()
         if kind == "unknown-key":  # well formed, so each one is looked up in the database
             return generate().key, data, records

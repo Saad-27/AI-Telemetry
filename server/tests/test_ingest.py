@@ -22,7 +22,13 @@ from app.core.config import Settings
 from app.core.entitlements import FREE
 from app.ingest.keys import IngestKey, generate
 from app.ingest.limits import Quota, RateLimiter
-from app.ingest.routes import MAX_BODY, MAX_DECOMPRESSED, MAX_RECORDS
+from app.ingest.routes import (
+    MAX_BODY,
+    MAX_DECOMPRESSED,
+    MAX_IN_FLIGHT,
+    MAX_RECORDS,
+    REJECTED_BYTES_PER_TOKEN,
+)
 from app.ingest.schema import Sample, Summary
 from app.main import create_app
 
@@ -316,10 +322,65 @@ def test_rate_limit_counts_records(
     ticks.now += 1
     assert post(client, envelope(samples=[sample()] * 30)).status_code == 202
     assert post(client, envelope()).headers["Retry-After"] == "3"  # 26 records owed at 10/s
-    # Rejected requests are free, and malformed ones cost their one token.
+    # Rejected requests are free; malformed ones cost their token and one per KB (here 1).
     ticks.now += 2.7
     assert post(client, b"{").status_code == 400
     assert post(client, envelope()).status_code == 429
+
+
+def test_rejected_bodies_are_charged_by_size(
+    client: TestClient, ticks: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert MAX_DECOMPRESSED // REJECTED_BYTES_PER_TOKEN == 2_000
+    limit(monkeypatch, records_per_s=10, records_burst=1_000)
+    bomb = gzip.compress(b" " * (MAX_DECOMPRESSED + 1))
+    assert post(client, bomb, **{"Content-Encoding": "gzip"}).status_code == 413
+    resp = post(client, envelope())  # 1,000 - 1 - 2,000: 1,001 owed at 10/s
+    assert (resp.status_code, resp.headers["Retry-After"]) == (429, "101")
+    # Corrupt gzip is charged as the most it could have inflated.
+    ticks.now += 101  # 9 tokens
+    assert post(client, b"not gzip", **{"Content-Encoding": "gzip"}).status_code == 400
+    assert post(client, envelope()).headers["Retry-After"] == "200"  # 1,992 owed
+    # Bodies parsed and then refused are charged by their size: 5,002 bytes, 6 tokens.
+    ticks.now += 1_000  # full again
+    assert post(client, b"[]" + b" " * 5_000).json() == {"error": "invalid_envelope"}
+    assert post(client, envelope(samples=[sample()] * 992)).status_code == 202  # 993 left
+    assert post(client, envelope()).status_code == 429
+
+
+def test_overloaded_machine_turns_requests_away_at_once(client: TestClient) -> None:
+    client.app.state.in_flight = MAX_IN_FLIGHT  # type: ignore[attr-defined]
+    keys(client).error = TimeoutError()  # never reached: no 503
+    retries = set()
+    for _ in range(30):
+        resp = post(client, envelope(samples=[sample()]))
+        assert (resp.status_code, resp.json()) == (429, {"error": "overloaded"})
+        retries.add(int(resp.headers["Retry-After"]))
+    assert retries <= set(range(3, 11)) and len(retries) > 1  # spread, so SDKs come back apart
+    assert sink(client).writes == []
+    keys(client).error = None
+    client.app.state.in_flight = MAX_IN_FLIGHT - 1  # type: ignore[attr-defined]
+    assert post(client, envelope(samples=[sample()])).status_code == 202
+
+
+def test_in_flight_counts_requests_until_answered(client: TestClient) -> None:
+    seen = []
+
+    class Watching(RecordingSink):
+        async def write(
+            self, project_id: uuid.UUID, summaries: Sequence[Summary], samples: Sequence[Sample]
+        ) -> None:
+            seen.append(client.app.state.in_flight)  # type: ignore[attr-defined]
+            await super().write(project_id, summaries, samples)
+
+    watching = client.app.state.sink = Watching()  # type: ignore[attr-defined]
+    assert post(client, envelope(samples=[sample()])).status_code == 202
+    assert post(client, envelope(), key=generate().key).status_code == 401
+    assert post(client, b"{").status_code == 400
+    watching.error = ConnectionResetError()
+    assert post(client, envelope(samples=[sample()])).status_code == 503
+    assert seen == [1, 1]
+    assert client.app.state.in_flight == 0  # type: ignore[attr-defined]
 
 
 def test_quota_is_checked_before_the_rate_limit(

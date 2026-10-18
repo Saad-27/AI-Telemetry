@@ -48,7 +48,7 @@ How to apply a setting is in [deploy.md](deploy.md).
 |---|---|---|
 | SSL mode **Full (strict)**, TLS 1.2 minimum, Always HTTPS, HSTS | No plaintext hop between users and Fly | **Done** in Terraform, applied at runbook step 5 |
 | Ingest hosts accept only `/v1/ingest`, `/healthz`, `/readyz` and ACME | Scanners never reach the app | **Done** in Terraform |
-| Per-IP rate limit on ingest | Flood protection before the app | **Done** in Terraform |
+| Per-IP rate limit on ingest | Flood protection before the app. The load test showed one machine needs it: 2,000 bad-key requests/s from one client pegged the app's core and timed out real traffic | **Done** in Terraform (300 per 10 s per IP). Only works once requests to `*.fly.dev` are refused (section 3). At step 8, rerun the bad-key flood through Cloudflare to check it is blocked |
 | Registrar lock on, DNSSEC active | Stops domain hijacking, which would redirect users' SDK traffic and keys to an attacker | Confirm both: DNSSEC was "pending" on 2026-10-14 |
 
 ## 5. Ingest app behaviour (M3 steps 2-5)
@@ -58,7 +58,9 @@ How to apply a setting is in [deploy.md](deploy.md).
 | Never log request bodies, keys, `Authorization` headers or driver error text. Log the exception type only, as `/readyz` does | Postgres errors can quote row values (for example a duplicate key hash) | **Done** (`app/ingest/routes.py`), tested on captured logs with sentinels in keys, bodies and exception messages; checked in the dev server's logs |
 | Metrics only on their own port (`METRICS_PORT`, 9091), not in `[http_service]`; labels hold fixed codes only, never IDs, keys or model names | Metrics would otherwise show tenants' activity to anyone, through `*.fly.dev` | **Done** (ADR 0021), tested (`/metrics` is 404 on the app port; scraped text checked for IDs and the key) |
 | No CORS headers on ingest | Keys belong on servers, never in browser code | **Done**, tested (preflight gets 405, no `Access-Control-*`) |
-| Size caps before reading the body; gunzip streamed with a 5 MB cap | Stops memory exhaustion and zip bombs | **Done**, tested (chunked uploads, a 5 MB bomb of 5 KB) |
+| Size caps before reading the body; gunzip streamed with a 2 MB cap (ADR 0025) | Stops memory exhaustion and zip bombs | **Done**, tested (chunked uploads, a 2 MB bomb of 2 KB) |
+| A body rejected after the key check costs the account one rate-limit token per KB read or inflated; corrupt gzip costs the cap (ADR 0025) | Junk only a hand-made client sends (a zip bomb costs ~5 ms of CPU) uses up the sender's allowance, not the machine: one bomb takes 2,000 of a free account's 3,000 burst | **Done**, tested; load test: a junk flood from 10 accounts refused after ~40 bodies |
+| Load shedding: past 50 requests in progress, `429 overloaded` with a random 3-10 s `Retry-After`, before the key lookup (ADR 0025) | Overload stored almost nothing before: clients gave up while the app served their queued requests. 429, because the SDK keeps a batch after it | **Done**, tested; load test: 290-340 records/s stored at 300-400 req/s, where it was ~10 |
 | Pydantic with `extra="forbid"`, strict enums and regexes; `endpoint_host` re-checked against the SDK's allowlist | Content-like or oversized strings can never be stored (P1), customers' hostnames never (P6), and stored XSS is blocked at the door | **Done** (`app/ingest/schema.py`, ADR 0016), tested |
 | Error responses carry a reason code, never input or a stack trace | Responses must not echo what was sent | **Done**: field names and error types only, never unknown keys or values, tested |
 | Only the SHA-256 of a key is stored; key cache at most 60 s | A database leak does not leak usable keys; revocation takes effect within a minute | **Done** (`app/ingest/keys.py`, ADR 0015), tested |

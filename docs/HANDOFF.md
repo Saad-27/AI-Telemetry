@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-18 (M3 step 7: load test run locally, results and proposals in `docs/capacity.md`; step 8 next)
+**Last updated:** 2026-10-18 (M3 step 7 done: load test #39, then load shedding and junk charges #40; step 8 next)
 
 ## Where the project is
 
@@ -19,10 +19,9 @@ session, in the same PR as the session's other changes, so it reaches `main`.
   printed `GASLIT_KEY` (`examples/README.md`).
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M3** (ingest and storage), plan below. Steps 1-6 are merged (#32-#38). Step 7
-  (load test) is in a PR, branch `m3-load-test`. **Waiting on Saad:** the proposals in
-  `docs/capacity.md` (machine size, load shedding, junk and per-request limits, the dashboard
-  target on 0.25 CU). Hosting (step 8) is next; confirm costs with Saad first.
+- **In progress: M3** (ingest and storage), plan below. Steps 1-7 are merged (#32-#40).
+  Hosting (step 8) is next; confirm costs with Saad first. Saad chose to start on
+  `shared-cpu-1x` and upgrade only once there are many users.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -47,6 +46,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0022 | Dashboard reads: one `sum()` per histogram bucket (5× faster than `unnest`, 20× faster than a SQL aggregate), behind `MetricsRepository` (`overview`, `series`, `Filters`). Each read is a read-only transaction that sets `app.project_id` for RLS. `quantile()` interpolates inside buckets. ~5 µs per summary read. **Proposed, for Saad:** p95 under 100 ms per query. 7-day reads of busy accounts took ~650 ms: fixed by 0023 |
 | 0023 | 5-minute and hourly totals (`totals_5m`, `totals_1h`), built 3 min after each 5-minute bucket ends by whichever machine is receiving summaries (checks every minute; never wakes an idle database) and by the daily upkeep. `totals_watermark`: totals before it, summaries after, so reads are always correct. Late summaries (≥ 2 min after their bucket) are marked by ingest in `totals_stale` and rebuilt next build. Reads split a range into ≤ 5 pieces (summaries, 5-min, hourly, 5-min, summaries). Per-minute summaries and 5-min totals kept 2 days, hourly and samples 7. Busy account: 5 / 7 / 10 ms for 1 h / 24 h / 7 d (was 6 / 93 / 651). Saad approved 2026-10-18 |
 | 0024 | Load test with our own open-loop generator (`tools/loadtest/`, reuses `tests/records.py`; not k6/Locust), locally on Docker limits copying production: app image in 256 MB on 1 core ("burst") or 5 ms/80 ms ("baseline", Fly's `shared-cpu-1x` quota once its burst balance is spent); Postgres at 0.25 CPU (Neon 0.25 CU). Rerun on Fly and Neon at step 8 |
+| 0025 | Load shedding: past 50 ingest requests in progress, `429 overloaded` with a random 3-10 s `Retry-After` (not 503: the SDK drops a batch after three 5xx). `MAX_DECOMPRESSED` 2 MB; a rejected body costs the account one rate-limit token per KB (corrupt gzip: the cap). No per-request limit per account (Saad) |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -162,12 +162,22 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    Spike and database outage handled well (503 after 2 s, recovery in 5-10 s). Past saturation
    ingest collapses rather than plateaus. A 2,000/s bad-key flood pegs the app (memory 166 MB);
    zip bombs cost 11 ms each. Dashboard 24 h/7 d charts take 70-200 ms on 0.25 CU.
-   **Open, for Saad:** proposals 1-7 in `docs/capacity.md`. None is built. The step 4 re-check
-   of ADR 0017's numbers is proposals 3-4: storage per row holds, but the rate limit should
-   count requests too.
+   **Then, PR #40 (ADR 0025, Saad's choices on the proposals):** load shedding (past 50
+   requests in progress, `429 overloaded`, random 3-10 s `Retry-After`; 429 because the SDK
+   keeps a batch after a 429 but drops it after three 5xx), `MAX_DECOMPRESSED` 2 MB, and
+   rejected bodies charged one rate-limit token per KB. Overload now stores 290-340 records/s
+   at 300-400 req/s instead of ~10; a junk flood stops after ~40 bodies. **Dropped (Saad):** a
+   per-request limit per account; usage within the quota must never be throttled by how it is
+   spread over processes. This was the step 4 re-check of ADR 0017: storage per row holds.
+   **Still open:** the dashboard target on 0.25 CU (proposal 5, for M4), grouping inserts
+   (later), quieting `ClientDisconnect` tracebacks (one-line fix).
 8. **Hosting** (runbook steps 2-6), with login roles created by SQL and granted
    `ingest_writer`/`dashboard_app`. Confirm costs with Saad first. Then rerun the load test
    against Fly and Neon (`docs/capacity.md`, "How to rerun") and put the number in the README.
+   Floods (from step 7): close the `*.fly.dev` bypass so Cloudflare's per-IP limit (300 per
+   10 s, in Terraform) applies, rerun the bad-key flood through Cloudflare, add the app's
+   per-IP limit on invalid keys, and check whether a machine that scales to zero restarts with
+   only a 5 s burst balance.
 
 ## Dashboard direction (Saad, 2026-10-17; for M4, and steps 6-7 now)
 

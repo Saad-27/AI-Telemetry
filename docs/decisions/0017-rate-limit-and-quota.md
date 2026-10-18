@@ -1,6 +1,6 @@
 # 0017: Per-account rate limit and monthly quota, sized to the database bill
 
-- **Status:** accepted; blocked accounts amended by [0019](0019-blocked-accounts-from-memory.md)
+- **Status:** accepted; blocked accounts amended by [0019](0019-blocked-accounts-from-memory.md); rejected bodies charged by size, and no per-request limit (Saad), by [0025](0025-load-shedding-and-rejected-body-charges.md)
 - **Date:** 2026-10-17
 
 ## Context
