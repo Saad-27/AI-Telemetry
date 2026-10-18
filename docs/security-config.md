@@ -56,6 +56,7 @@ How to apply a setting is in [deploy.md](deploy.md).
 | Requirement | Why | Status |
 |---|---|---|
 | Never log request bodies, keys, `Authorization` headers or driver error text. Log the exception type only, as `/readyz` does | Postgres errors can quote row values (for example a duplicate key hash) | **Done** (`app/ingest/routes.py`), tested on captured logs with sentinels in keys, bodies and exception messages; checked in the dev server's logs |
+| Metrics only on their own port (`METRICS_PORT`, 9091), not in `[http_service]`; labels hold fixed codes only, never IDs, keys or model names | Metrics would otherwise show tenants' activity to anyone, through `*.fly.dev` | **Done** (ADR 0021), tested (`/metrics` is 404 on the app port; scraped text checked for IDs and the key) |
 | No CORS headers on ingest | Keys belong on servers, never in browser code | **Done**, tested (preflight gets 405, no `Access-Control-*`) |
 | Size caps before reading the body; gunzip streamed with a 5 MB cap | Stops memory exhaustion and zip bombs | **Done**, tested (chunked uploads, a 5 MB bomb of 5 KB) |
 | Pydantic with `extra="forbid"`, strict enums and regexes; `endpoint_host` re-checked against the SDK's allowlist | Content-like or oversized strings can never be stored (P1), customers' hostnames never (P6), and stored XSS is blocked at the door | **Done** (`app/ingest/schema.py`, ADR 0016), tested |

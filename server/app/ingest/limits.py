@@ -16,6 +16,7 @@ from uuid import UUID
 import asyncpg
 
 from app.core.entitlements import Entitlements, entitlements
+from app.core.metrics import QUOTA_FLUSHES
 from app.db import DB_TIMEOUT_S
 from app.ingest.keys import IngestKey
 
@@ -159,9 +160,11 @@ class Quota:
                     timeout=DB_TIMEOUT_S,
                 )
         except BaseException:
+            QUOTA_FLUSHES.labels("failed").inc()
             for key, (calls, records) in pending.items():
                 self._add_pending(key, calls, records)
             raise
+        QUOTA_FLUSHES.labels("ok").inc()
         for row in rows:
             self.learn(row["user_id"], row["month"], row["calls"], row["records"])
 

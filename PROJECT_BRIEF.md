@@ -896,6 +896,7 @@ This is dogfooding, and good interview material.
   - rollup lag (now minus the last processed minute), once rollups exist ([ADR 0008](docs/decisions/0008-shared-db-read-time-aggregation.md)); until then, dashboard query latency
   - status poller success per source
   - quota rejections
+  - Built in M3 step 5: the ingest, insert, key-lookup, quota-flush and partition metrics, served on a private port that Fly scrapes ([ADR 0021](docs/decisions/0021-prometheus-metrics.md)).
 - **Dashboards and logs:** Grafana (Grafana Cloud free tier or self-hosted), structured JSON logs, and an external uptime check on `/healthz`.
 - **Internal targets**, not promised to users: ingest availability 99.5% and rollup lag under 2 minutes.
 - **Load test** the ingest API with k6 or Locust, and record the sustained events per second on the smallest production setup. Put the real number in the README.

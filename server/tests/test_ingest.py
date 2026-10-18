@@ -5,6 +5,7 @@ import dataclasses
 import gzip
 import json
 import logging
+import urllib.request
 import uuid
 import zlib
 from collections.abc import Iterator, Sequence
@@ -14,6 +15,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from httpx2 import Response
+from prometheus_client import REGISTRY
 from records import envelope, gzipped, sample, summary
 
 from app.core.config import Settings
@@ -28,6 +30,7 @@ KEY = generate()
 FOUND = IngestKey(uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), "free")
 PROJECT = FOUND.project_id
 SENTINEL = "SENTINEL-secret-text"
+DEAD_DB = "postgresql://nobody:x@127.0.0.1:1/none"
 # The last minute of October, UTC: quotas reset 60 s later.
 OCT_END = datetime(2026, 10, 31, 23, 59, tzinfo=UTC).timestamp()
 
@@ -77,7 +80,11 @@ def ticks() -> Clock:
 
 @pytest.fixture
 def client(clock: Clock, ticks: Clock) -> Iterator[TestClient]:
-    app = create_app(Settings(database_url="postgresql://nobody:x@127.0.0.1:1/none"))
+    yield from app_client(clock, ticks)
+
+
+def app_client(clock: Clock, ticks: Clock, metrics_port: int | None = None) -> Iterator[TestClient]:
+    app = create_app(Settings(DEAD_DB, metrics_port=metrics_port))
     with TestClient(app) as client:
         app.state.keys = FakeKeys()
         app.state.sink = RecordingSink()
@@ -321,6 +328,48 @@ def test_quota_is_checked_before_the_rate_limit(
     limit(monkeypatch, monthly_calls=1, records_burst=2)
     assert post(client, envelope([summary()])).status_code == 202
     assert post(client, envelope()).json() == {"error": "quota_exceeded"}
+
+
+def metric(name: str, **labels: str) -> float:
+    return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+def test_answers_are_counted_in_the_metrics(client: TestClient) -> None:
+    names = [
+        ("gaslit_ingest_requests_total", {"status": "202", "reason": "accepted"}),
+        ("gaslit_ingest_requests_total", {"status": "401", "reason": "invalid_key"}),
+        ("gaslit_ingest_requests_total", {"status": "503", "reason": "unavailable"}),
+        ("gaslit_ingest_records_total", {"type": "summary", "outcome": "accepted"}),
+        ("gaslit_ingest_records_total", {"type": "sample", "outcome": "accepted"}),
+        ("gaslit_ingest_records_total", {"type": "sample", "outcome": "rejected"}),
+        ("gaslit_ingest_batch_records_sum", {}),
+        ("gaslit_ingest_request_seconds_count", {}),
+        ("gaslit_db_insert_seconds_count", {}),
+    ]
+    before = [metric(name, **labels) for name, labels in names]
+    post(client, envelope([summary()], [sample(), sample(provider="acme")]))
+    post(client, envelope(), key=generate().key)
+    sink(client).error = ConnectionResetError()
+    post(client, envelope(samples=[sample()]))
+    after = [metric(name, **labels) for name, labels in names]
+    # The failed insert counts as a 503 and in the insert time, but stored no records.
+    assert [b - a for a, b in zip(before, after, strict=True)] == [1, 1, 1, 1, 1, 1, 3, 3, 2]
+
+
+def test_metrics_are_served_on_their_own_port_without_ids(clock: Clock, ticks: Clock) -> None:
+    # Port 0: any free one. Stopping the server takes up to 0.5 s, so only this test starts it.
+    for client in app_client(clock, ticks, metrics_port=0):
+        assert post(client, envelope([summary()], [sample()])).status_code == 202
+        server, _ = client.app.state.metrics  # type: ignore[attr-defined]
+        with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/metrics") as resp:
+            text = resp.read().decode()
+        public = client.get("/metrics").status_code
+    assert 'gaslit_ingest_requests_total{reason="accepted",status="202"}' in text
+    assert "process_resident_memory_bytes" in text
+    assert "_created" not in text
+    for secret in (str(PROJECT), str(FOUND.user_id), str(FOUND.id), KEY.key, "claude"):
+        assert secret not in text
+    assert public == 404  # never on the public port
 
 
 def test_logs_and_responses_never_hold_keys_or_content(

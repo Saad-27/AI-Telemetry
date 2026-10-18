@@ -9,6 +9,8 @@ _DEV_DATABASE_URL = "postgresql://app:app@127.0.0.1:5432/app"
 @dataclass(frozen=True, slots=True)
 class Settings:
     database_url: str
+    # Prometheus metrics on their own port, never the public one (ADR 0021). None: off.
+    metrics_port: int | None = None
 
 
 def load_settings() -> Settings:
@@ -16,7 +18,8 @@ def load_settings() -> Settings:
     # Fly sets FLY_APP_NAME on every machine, including the release command.
     if os.environ.get("FLY_APP_NAME"):
         _require_verified_tls(url)
-    return Settings(database_url=url)
+    port = os.environ.get("METRICS_PORT")
+    return Settings(database_url=url, metrics_port=int(port) if port else None)
 
 
 def _require_verified_tls(url: str) -> None:

@@ -20,6 +20,14 @@ def test_deployed_accepts_verify_full(monkeypatch: pytest.MonkeyPatch) -> None:
     assert load_settings().database_url.endswith("sslmode=verify-full")
 
 
+def test_metrics_port_is_off_unless_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FLY_APP_NAME", raising=False)
+    monkeypatch.delenv("METRICS_PORT", raising=False)
+    assert load_settings().metrics_port is None
+    monkeypatch.setenv("METRICS_PORT", "9091")
+    assert load_settings().metrics_port == 9091
+
+
 def test_local_needs_no_tls(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FLY_APP_NAME", raising=False)
     monkeypatch.setenv("DATABASE_URL", "postgresql://app:app@postgres:5432/app")

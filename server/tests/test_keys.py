@@ -7,6 +7,7 @@ from types import TracebackType
 from typing import Any
 
 import pytest
+from prometheus_client import REGISTRY
 
 from app.ingest.keys import (
     BODY_LEN,
@@ -154,12 +155,18 @@ async def test_found_key_is_cached_until_expiry(pool: FakePool, clock: Clock) ->
 
 @pytest.mark.anyio
 async def test_unknown_key_is_not_cached(pool: FakePool) -> None:
+    def lookups(result: str) -> float:
+        return REGISTRY.get_sample_value("gaslit_key_lookups_total", {"result": result}) or 0.0
+
+    before = lookups("found"), lookups("missing")
     store = KeyStore(pool)
     other = generate()
     assert await store.resolve(other.key) is None
     pool.rows[other.key_hash] = found()  # created after the first try
     assert await store.resolve(other.key) is not None
+    assert await store.resolve(other.key) is not None  # cached: not a lookup
     assert pool.queries == 2
+    assert (lookups("found") - before[0], lookups("missing") - before[1]) == (1, 1)
 
 
 @pytest.mark.anyio

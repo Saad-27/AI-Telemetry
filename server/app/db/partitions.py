@@ -17,6 +17,7 @@ import asyncpg
 
 from app.core.config import load_settings
 from app.core.entitlements import longest_retention_days
+from app.core.metrics import PARTITIONS_MAINTAINED
 from app.db import DB_TIMEOUT_S
 
 log = logging.getLogger(__name__)
@@ -116,7 +117,8 @@ async def maintain_daily(
         if day != done:
             try:
                 async with pool.acquire(timeout=DB_TIMEOUT_S) as conn:
-                    await maintain(conn, day, keep_days)
+                    if await maintain(conn, day, keep_days):
+                        PARTITIONS_MAINTAINED.set_to_current_time()
                 done = day
             except Exception as exc:
                 # Type only: driver messages can quote connection details.
