@@ -267,7 +267,8 @@ def test_an_upgrade_resumes_sending_at_the_next_check(
     resp = post(client, envelope([summary()]))
     assert resp.status_code == 429
     assert resp.headers["Retry-After"] == "60"  # not two weeks: SDKs check back each minute
-    limit(monkeypatch, monthly_calls=10_000)  # the plan the key cache returns next
+    # The plan the next key lookup returns, once the upgrade flow calls Quota.unblock (ADR 0019).
+    limit(monkeypatch, monthly_calls=10_000)
     assert post(client, envelope([summary()])).status_code == 202
 
 

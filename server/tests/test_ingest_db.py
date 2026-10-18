@@ -12,8 +12,11 @@ from fastapi.testclient import TestClient
 from records import envelope, gzipped, now_ms, sample, summary
 
 from app.core.config import Settings
+from app.core.entitlements import FREE
 from app.db.dev_key import create_dev_key
 from app.db.partitions import ensure_partitions
+from app.ingest.keys import KeyStore, generate
+from app.ingest.limits import Quota
 from app.ingest.schema import Envelope, validate_records
 from app.ingest.sink import PostgresSink
 from app.main import create_app
@@ -151,6 +154,43 @@ def test_usage_is_counted_for_the_account(database_url: str) -> None:
         assert post(client, key, batch)[1]["accepted"] == 2
     # Counted in memory, then stored when the app stops. Rejected records are not counted.
     assert run(database_url, query, project) == [(calls + 120, records + 2)]
+
+
+def test_accounts_over_quota_are_answered_without_the_database(database_url: str) -> None:
+    # A fresh account with a whole month's calls already stored by other machines.
+    key = generate()
+    [(key_id, user)] = run(
+        database_url,
+        """
+        WITH u AS (INSERT INTO users (email) VALUES ('over@example.com') RETURNING id),
+        p AS (INSERT INTO projects (name, owner_user_id) SELECT 'p', id FROM u RETURNING id),
+        m AS (
+            INSERT INTO monthly_usage (user_id, month, calls, records)
+            SELECT id, date_trunc('month', now() AT TIME ZONE 'UTC')::date, $4, 0 FROM u
+        )
+        INSERT INTO ingest_keys (project_id, key_hash, display_prefix, last4)
+        SELECT p.id, $1, $2, $3 FROM p RETURNING id, (SELECT id FROM u) AS user_id
+        """,
+        key.key_hash,
+        key.display_prefix,
+        key.last4,
+        FREE.monthly_calls,
+    )
+    last_used = "SELECT last_used_at FROM ingest_keys WHERE id = $1"
+    with TestClient(create_app(Settings(database_url=database_url))) as client:
+        state = client.app.state  # type: ignore[attr-defined]
+        quota = state.quota = Quota(state.pool)
+        # Every entry expires at once, as a minute's wait would make it.
+        state.keys = KeyStore(state.pool, ttl_s=0, keep=quota.blocks, learn=quota.learn)
+        batch = envelope([summary()])
+        assert post(client, key.key, batch) == (429, {"error": "quota_exceeded"})  # at once
+        [(first,)] = run(database_url, last_used, key_id)
+        for _ in range(3):
+            assert post(client, key.key, batch)[0] == 429
+        assert run(database_url, last_used, key_id) == [(first,)]  # never looked up again
+        quota.unblock(user)  # what the upgrade flow will do; the plan is still free
+        assert post(client, key.key, batch)[0] == 429
+        assert run(database_url, last_used, key_id) != [(first,)]
 
 
 def test_records_on_both_sides_of_midnight(client: TestClient, database_url: str) -> None:

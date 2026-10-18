@@ -28,10 +28,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.pool = await asyncpg.create_pool(
             settings.database_url, min_size=0, max_size=5, timeout=DB_TIMEOUT_S
         )
-        app.state.keys = KeyStore(app.state.pool)
+        quota = app.state.quota = Quota(app.state.pool)
+        # Accounts over quota are answered from memory, so their SDKs' checks every minute let
+        # the database sleep (ADR 0019).
+        app.state.keys = KeyStore(app.state.pool, keep=quota.blocks, learn=quota.learn)
         app.state.sink = PostgresSink(app.state.pool)
         app.state.rate = RateLimiter()
-        quota = app.state.quota = Quota(app.state.pool)
         flusher = asyncio.create_task(quota.flush_every())
         try:
             yield

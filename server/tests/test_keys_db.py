@@ -94,3 +94,20 @@ async def test_plan_changes_apply_when_the_cache_expires(
     now[0] = 60.0
     found = await store.resolve(new.key)
     assert found is not None and found.plan == "pro"
+
+
+async def test_lookup_returns_this_months_usage(
+    owner: asyncpg.Connection, ingest_pool: asyncpg.Pool
+) -> None:
+    learned: list[tuple[object, ...]] = []
+    store = KeyStore(ingest_pool, learn=lambda *usage: learned.append(usage))
+    new, expected = await add_key(owner)
+    month = await owner.fetchval("SELECT date_trunc('month', now() AT TIME ZONE 'UTC')::date")
+    await owner.execute(
+        "INSERT INTO monthly_usage (user_id, month, calls, records) "
+        "VALUES ($1, $2, 7, 11), ($1, $2 - interval '1 month', 99, 99)",
+        expected.user_id,
+        month,
+    )
+    assert await store.resolve(new.key) == expected
+    assert learned == [(expected.user_id, month, 7, 11)]
