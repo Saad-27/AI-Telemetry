@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-18 (M3 step 6 in a PR: read-time sums and the end-to-end test; step 7 next)
+**Last updated:** 2026-10-18 (M3 step 6 in two stacked PRs: read-time sums, then 5-minute and hourly totals; step 7 next)
 
 ## Where the project is
 
@@ -20,9 +20,10 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
 - **In progress: M3** (ingest and storage), plan below. Steps 1-5 are merged (#32-#36). Step 6
-  (read-time sums, end-to-end test) is in a PR from branch `m3-read-sums`. **Waiting on Saad:**
-  the latency target and the 7-day fix in ADR 0022. Step 7 (load test) is next. Hosting is the
-  last step; confirm costs with Saad first.
+  is in two stacked PRs: #37 (read-time sums, end-to-end test, branch `m3-read-sums`) and #38
+  (5-minute and hourly totals, branch `m3-totals`, based on #37's branch: retarget it to
+  `main` before deleting `m3-read-sums`). **Waiting on Saad:** the latency target (ADR 0022).
+  Step 7 (load test) is next. Hosting is the last step; confirm costs with Saad first.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -44,7 +45,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0019 | Accounts over quota are answered from memory: an expired cached key is kept while its account is blocked, so SDKs' checks every minute never reach the database. The key lookup also returns this month's usage, so a new machine blocks at once. `Quota.unblock(user_id)` is for the upgrade flow, which must call it on every ingest machine |
 | 0020 | Partition upkeep and retention run inside the app: at startup, then once per UTC day (hourly date check), under an advisory lock, `lock_timeout` 1 s. Days before today − `longest_retention_days()` are dropped, so rows live 7-8 days. Needs the table owner: how, once the app stops being the owner, is a step 8 decision |
 | 0021 | Prometheus metrics with `prometheus_client` on their own port (`METRICS_PORT`, 9091), scraped by Fly into its free Prometheus/Grafana; never on the public port; labels fixed codes only. Requests by status and reason, latency, records, batch size, insert time, key lookups that reach the DB, quota flushes, last partition run |
-| 0022 | Dashboard reads: one `sum()` per histogram bucket (5× faster than `unnest`, 20× faster than a SQL aggregate), behind `MetricsRepository` (`overview`, `series`, `Filters`). Each read is a read-only transaction that sets `app.project_id` for RLS. `quantile()` interpolates inside buckets. ~5 µs per summary read. **Proposed, for Saad:** p95 under 100 ms per query; hourly totals for hours over 24 h old (they can't change) to fix 7-day reads of busy accounts (620 → 68 ms) |
+| 0022 | Dashboard reads: one `sum()` per histogram bucket (5× faster than `unnest`, 20× faster than a SQL aggregate), behind `MetricsRepository` (`overview`, `series`, `Filters`). Each read is a read-only transaction that sets `app.project_id` for RLS. `quantile()` interpolates inside buckets. ~5 µs per summary read. **Proposed, for Saad:** p95 under 100 ms per query. 7-day reads of busy accounts took ~650 ms: fixed by 0023 |
+| 0023 | 5-minute and hourly totals (`totals_5m`, `totals_1h`), built 3 min after each 5-minute bucket ends by whichever machine is receiving summaries (checks every minute; never wakes an idle database) and by the daily upkeep. `totals_watermark`: totals before it, summaries after, so reads are always correct. Late summaries (≥ 2 min after their bucket) are marked by ingest in `totals_stale` and rebuilt next build. Reads split a range into ≤ 5 pieces (summaries, 5-min, hourly, 5-min, summaries). Per-minute summaries and 5-min totals kept 2 days, hourly and samples 7. Busy account: 5 / 7 / 10 ms for 1 h / 24 h / 7 d (was 6 / 93 / 651). Saad approved 2026-10-18 |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -137,6 +139,18 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    (~$1.60/month more on Neon). Measured 68 ms instead of 620 ms. `rollups_1m` would not help
    7-day charts. The benchmark scripts were throwaway (session scratchpad); step 7's load
    test should time the repository on Neon at 0.25 CU.
+   **Then: 5-minute and hourly totals, in PR #38** (`server/app/db/totals.py`, migration
+   `0003`, ADR 0023; Saad asked for every range to be fast, detail past a day can be coarser).
+   `Totals` in the lifespan (`app.state.totals`); ingest calls `totals.note(summaries)` after
+   storing; the sink writes late marks right after the summaries. `maintain(conn, now,
+   keep_days)` now takes a datetime, builds before dropping, and catches up partitions after
+   long pauses; `retention()` gives each table's first kept day, and never drops summaries
+   not yet in totals. Tests: `test_totals.py` (when a machine builds), `test_totals_db.py`
+   (totals equal the summaries, late rebuilds, lock, catch-up, RLS), and every repository and
+   end-to-end read checked from summaries and from totals. Tests that need totals set
+   `totals_watermark` themselves, since it is shared by the test database.
+   **Measured** (ADR 0023): every range 5-30 ms for the busy account; one build 16 ms for all
+   accounts; test-data storage 624 → 308 MB.
 7. **Load test**, results in `docs/capacity.md`.
 8. **Hosting** (runbook steps 2-6), with login roles created by SQL and granted
    `ingest_writer`/`dashboard_app`. Confirm costs with Saad first.
@@ -154,9 +168,9 @@ to change** (switching range, filters or pages should feel instant). Both count 
 - **Speed is designed in:** brief §21's budget (~200 KB gzipped JS, uPlot only, lazy-loaded
   detail pages), no layout shift while loading, cached responses so changing a filter only
   fetches what changed.
-- **It starts in M3.** The dashboard reads by summing `summary_records` (ADR 0008), so step 6's
-  queries decide how fast a range or filter change is. Target proposed in ADR 0022 (p95 under
-  100 ms per query, awaiting Saad); measure it in the step 7 load test.
+- **It starts in M3.** Step 6's reads decide how fast a range or filter change is. Totals
+  (ADR 0023) make every range ~5-30 ms locally. Target proposed in ADR 0022 (p95 under 100 ms
+  per query, awaiting Saad); measure it on Neon in the step 7 load test.
 - Keep the frontend simple to change: few small components, no UI framework sprawl.
 - **Show recovery quickly (Saad).** When a provider comes back, the dashboard must say so within
   minutes, not after the 15-minute badge window: a "recovering" badge once the last 2 complete

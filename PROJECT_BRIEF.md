@@ -579,7 +579,7 @@ All numbers are placeholders (Section 16).
 | Limit | Placeholder |
 |---|---|
 | Calls measured per account | 1M/month (cheap to serve because of Section 19) |
-| Retention | 7 days (summaries, samples and rollups) |
+| Retention | 7 days: samples and hourly totals. Per-minute summaries and 5-minute totals: 2 days ([ADR 0023](docs/decisions/0023-tiered-totals.md)) |
 | Projects | 1 (D7) |
 | Records stored per account | 2M/month. Protective: the SDK sends at most two records per call, so the calls limit is reached first |
 | Records per second per account | 20, with bursts to 3,000. Protective |
@@ -724,7 +724,7 @@ Cookie session auth. **Every route is scoped to projects the user is a member of
 - `GET /api/status/incidents?providers=&range=`
 - `GET /api/global/series?provider=&route=&model=&bucket=&continent=&metric=&range=` (returns only points that meet P6)
 
-**Chart resolution by range:** 1 h → 1-minute points, 24 h → 5-minute points, 7 d → 1-hour points. Charts are always served from rollups, never by scanning raw records. **Until rollups are added, charts sum `summary_records` at read time ([ADR 0008](docs/decisions/0008-shared-db-read-time-aggregation.md)).**
+**Chart resolution by range:** 1 h → 1-minute points, 24 h → 5-minute points, 7 d → 1-hour points. Charts are always served from rollups, never by scanning raw records. **Built: 5-minute and hourly totals (`totals_5m`, `totals_1h`), with per-minute summaries only for the 1-hour view, the range edges and the newest minutes ([ADR 0023](docs/decisions/0023-tiered-totals.md)).**
 
 ### 9.4 Storage design
 
@@ -791,9 +791,12 @@ Adding arrays together gives exact bucket counts for any time range or group of 
 
 ### 9.5 Rollup worker
 
-> **Deferred (15 October 2026).** No rollup worker or `rollups_1m` at launch: the dashboard sums
-> `summary_records` at read time. This section is the design for when measurements need it. See
-> [ADR 0008](docs/decisions/0008-shared-db-read-time-aggregation.md).
+> **Replaced (18 October 2026).** There is no every-minute worker and no `rollups_1m`. Instead
+> `totals_5m` and `totals_1h` are built while data arrives, by whichever machine receives it,
+> with late data marked by ingest and rebuilt
+> ([ADR 0023](docs/decisions/0023-tiered-totals.md)). Read-time sums alone (ADR 0008) took
+> ~650 ms for 7 days of a busy account; totals take ~10 ms. The section below is the original
+> design, kept for the global rollups it also describes.
 
 **Schedule:** runs every 60 s and recomputes `rollups_1m` for the minutes in [now − 15 min, now − 1 min] by summing the `summary_records` from all of a project's app processes, upserting the results. Recomputing whole minutes makes it idempotent. The 15-minute window covers the SDK's longest send delay (the 5-minute `Retry-After` cap plus retries).
 

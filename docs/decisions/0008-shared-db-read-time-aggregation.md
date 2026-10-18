@@ -1,6 +1,6 @@
 # 0008: One shared database with per-account limits; sum summaries at read time
 
-- **Status:** accepted
+- **Status:** accepted. The read side is replaced by [0023](0023-tiered-totals.md): 5-minute and hourly totals, built only while data arrives, so still no always-on worker
 - **Date:** 2026-10-15
 
 ## Context

@@ -1,16 +1,17 @@
-"""Dashboard reads: the per-minute summaries summed when a page asks (brief §9.3, ADR 0008,
-ADR 0022).
+"""Dashboard reads (brief §9.3, ADR 0022, ADR 0023).
 
 The repository seam (brief §20.7): dashboard routes read metrics only through
-`MetricsRepository`, so what sits behind it (pre-summed hours, another database) can change
-without them. Histograms have fixed buckets, so summing them bucket by bucket is exact over any
-range, any group of series and any number of app processes. Percentiles come afterwards, from
-the sums (`quantile`).
+`MetricsRepository`, so what sits behind it can change without them. A read sums the coarsest
+pre-summed totals that fit the range (hourly, then 5-minute, app.db.totals) and per-minute
+summaries for the rest: the edges, and the newest minutes not built yet. So it costs about the
+same for any range, whatever an account's traffic. Histograms have fixed buckets, so summing
+them bucket by bucket is exact over any range, group of series and number of app processes.
+Percentiles come afterwards, from the sums (`quantile`).
 """
 
 from collections.abc import Sequence
 from dataclasses import astuple, dataclass, fields
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -18,7 +19,17 @@ import asyncpg
 
 from app.core.metrics import DASHBOARD_QUERY_SECONDS
 from app.db import DB_TIMEOUT_S
-from app.ingest.schema import DECODE_BUCKETS, ERROR_CLASSES, LATENCY_BUCKETS
+from app.db.totals import (
+    COUNTS,
+    DETAIL_DAYS,
+    FIVE_MINUTES,
+    HISTOGRAMS,
+    HOUR,
+    ceil,
+    floor,
+    sums,
+)
+from app.ingest.schema import ERROR_CLASSES
 
 MIN_SAMPLES = 20  # no percentile from fewer values (brief §10.3)
 
@@ -73,48 +84,61 @@ class Point:
     sums: Sums
 
 
-_COUNTS = (
-    "count", "ok", "cancelled", *(f"err_{c}" for c in ERROR_CLASSES),
-    "input_tokens_sum", "output_tokens_sum", "output_tokens_estimated_count",
-)  # fmt: skip
-_HISTOGRAMS = (
-    ("ttft_hist", LATENCY_BUCKETS),
-    ("duration_hist", LATENCY_BUCKETS),
-    ("decode_hist", DECODE_BUCKETS),
+# The pieces of a range, in time order, each [from, to): summaries, 5-minute totals, hourly
+# totals, 5-minute totals, summaries. Unused pieces are empty. $2 to $11 are their bounds.
+_PIECES = (
+    ("summary_records", "minute"),
+    ("totals_5m", "bucket"),
+    ("totals_1h", "bucket"),
+    ("totals_5m", "bucket"),
+    ("summary_records", "minute"),
 )
 _FILTERS = tuple(f.name for f in fields(Filters))  # columns, in the order astuple() gives
+_FIRST_FILTER = 2 + 2 * len(_PIECES)
+_STEP = f"${_FIRST_FILTER + len(_FILTERS)}"
 
 
-def _sums() -> str:
-    """Every count summed, and every histogram summed bucket by bucket.
+def _piece(i: int, table: str, time: str) -> str:
+    """One piece's rows, with the columns the reads group by. Built from constants only."""
+    histograms = (f"{h}::bigint[] AS {h}" if time == "minute" else h for h, _ in HISTOGRAMS)
+    filters = " AND ".join(
+        f"(${n}::text IS NULL OR {column} = ${n})"
+        for n, column in enumerate(_FILTERS, _FIRST_FILTER)
+    )
+    return (
+        f"SELECT {time} AS t, provider, route, model, input_bucket, "  # noqa: S608
+        f"{', '.join([*COUNTS, *histograms])} FROM {table} WHERE project_id = $1 "
+        f"AND {time} >= ${2 + 2 * i} AND {time} < ${3 + 2 * i} AND {filters}"
+    )
 
-    Postgres has no element-wise array sum. One `sum()` per bucket was the fastest way measured:
-    5 times faster than `unnest ... WITH ORDINALITY`, 20 times faster than an aggregate written
-    in SQL (ADR 0022). `sum` of a bigint is numeric, hence the casts.
-    """
-    counts = [f"sum({c})::bigint AS {c}" for c in _COUNTS]
-    histograms = [
-        "ARRAY[" + ", ".join(f"sum({h}[{i}])" for i in range(1, n + 1)) + f"] AS {h}"
-        for h, n in _HISTOGRAMS
-    ]
-    return ", ".join(counts + histograms)
 
-
-# $1 project, $2 start, $3 end, then one parameter per filter. Column names come from the
-# constants above only.
-_WHERE = "project_id = $1 AND minute >= $2 AND minute < $3 AND " + " AND ".join(
-    f"(${i}::text IS NULL OR {column} = ${i})" for i, column in enumerate(_FILTERS, 4)
-)
+_ROWS = " UNION ALL ".join(_piece(i, *piece) for i, piece in enumerate(_PIECES))
 _OVERVIEW = (
-    f"SELECT provider, route, model, {_sums()} FROM summary_records "  # noqa: S608
-    f"WHERE {_WHERE} GROUP BY provider, route, model"
+    f"SELECT provider, route, model, {sums()} FROM ({_ROWS}) r "  # noqa: S608
+    "GROUP BY provider, route, model"
 )
-# Steps are counted from midnight UTC on 2000-01-01, so 1 minute, 5 minutes and 1 hour fall on
-# round times.
+# Steps are counted from midnight UTC on 2000-01-01, like the totals' buckets.
 _SERIES = (
-    f"SELECT date_bin(${len(_FILTERS) + 4}, minute, '2000-01-01T00:00:00+00') AS start, "  # noqa: S608
-    f"input_bucket, {_sums()} FROM summary_records WHERE {_WHERE} GROUP BY 1, 2 ORDER BY 1, 2"
+    f"SELECT date_bin({_STEP}, t, '2000-01-01T00:00:00+00') AS start, input_bucket, "  # noqa: S608
+    f"{sums()} FROM ({_ROWS}) r GROUP BY 1, 2 ORDER BY 1, 2"
 )
+
+
+def _bounds(
+    start: datetime, end: datetime, built: datetime, grains: Sequence[timedelta]
+) -> list[datetime]:
+    """The pieces' bounds: the coarsest totals in `grains` that fit inside [start, built), and
+    summaries for the rest."""
+    upto = min(max(built, start), end)
+    f0 = f1 = h0 = h1 = start
+    a, b = ceil(start, FIVE_MINUTES), floor(upto, FIVE_MINUTES)
+    if FIVE_MINUTES in grains and a < b:
+        f0, f1 = a, b
+    if HOUR in grains and (a := ceil(start, HOUR)) < (b := floor(upto, HOUR)):
+        h0, h1 = a, b
+    else:
+        h0 = h1 = f1
+    return [start, f0, f0, h0, h0, h1, h1, f1, f1, end]
 
 
 def _sums_of(row: asyncpg.Record) -> Sums:
@@ -139,8 +163,14 @@ class MetricsRepository:
     async def overview(
         self, project_id: UUID, start: datetime, end: datetime, filters: Filters = ANY
     ) -> list[ModelSums]:
-        """Totals per provider, route and model, over the minutes in [start, end)."""
-        rows = await self._read("overview", _OVERVIEW, project_id, start, end, filters)
+        """Totals per provider, route and model, over the minutes in [start, end).
+
+        Only hourly totals are kept past DETAIL_DAYS, so a `start` that old is moved back to
+        the start of its hour.
+        """
+        rows = await self._read(
+            "overview", _OVERVIEW, project_id, start, end, (FIVE_MINUTES, HOUR), filters
+        )
         return [ModelSums(r["provider"], r["route"], r["model"], _sums_of(r)) for r in rows]
 
     async def series(
@@ -154,9 +184,10 @@ class MetricsRepository:
         """Totals per step and input bucket, over the minutes in [start, end), oldest first.
 
         Steps with no calls are left out. `start` should fall on a step, or the first point
-        covers less than a step.
+        covers less than a step. Steps under an hour reach back DETAIL_DAYS at most.
         """
-        rows = await self._read("series", _SERIES, project_id, start, end, filters, step)
+        grains = [g for g in (FIVE_MINUTES, HOUR) if step % g == timedelta(0)]
+        rows = await self._read("series", _SERIES, project_id, start, end, grains, filters, step)
         return [Point(r["start"], r["input_bucket"], _sums_of(r)) for r in rows]
 
     async def _read(
@@ -166,9 +197,12 @@ class MetricsRepository:
         project_id: UUID,
         start: datetime,
         end: datetime,
+        grains: Sequence[timedelta],
         filters: Filters,
         *extra: Any,
     ) -> list[asyncpg.Record]:
+        if start < datetime.now(UTC) - timedelta(days=DETAIL_DAYS):
+            start = floor(start, HOUR)
         with DASHBOARD_QUERY_SECONDS.labels(name).time():
             async with (
                 self._pool.acquire(timeout=DB_TIMEOUT_S) as conn,
@@ -176,13 +210,15 @@ class MetricsRepository:
             ):
                 # Row-level security shows dashboard_app this project's rows only (ADR 0013),
                 # whatever the WHERE clause says. The WHERE clause is what uses the index.
-                await conn.execute(
-                    "SELECT set_config('app.project_id', $1, true)",
+                row = await conn.fetchrow(
+                    "SELECT set_config('app.project_id', $1, true), "
+                    "(SELECT built_through FROM totals_watermark)",
                     str(project_id),
                     timeout=DB_TIMEOUT_S,
                 )
+                bounds = _bounds(start, end, row[1], grains)
                 return await conn.fetch(  # type: ignore[no-any-return]
-                    sql, project_id, start, end, *astuple(filters), *extra, timeout=DB_TIMEOUT_S
+                    sql, project_id, *bounds, *astuple(filters), *extra, timeout=DB_TIMEOUT_S
                 )
 
 

@@ -87,7 +87,7 @@ other cost, is bounded by `entitlements()` ([ADR 0017](decisions/0017-rate-limit
 Raise the size only when the load test or production metrics show it is needed. Metrics are in
 Fly's Grafana at fly-metrics.net once the app is deployed (ADR 0021): set alerts there for no
 successful partition run in 2 days, 503s, quota flush failures, ingest p95 latency over 200 ms
-and dashboard query p95 over 300 ms (ADR 0008's point for pre-summed data).
+dashboard query p95 over 100 ms (ADR 0022's target), and any failed totals build (ADR 0023).
 
 **Fly:** install `flyctl` and run `fly auth login`, then:
 

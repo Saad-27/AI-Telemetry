@@ -56,6 +56,8 @@ Fly scrapes it. The public port answers `/metrics` with 404.
 | `gaslit_quota_flushes_total` | counter | `result` (`ok`, `failed`) |
 | `gaslit_partitions_last_success_timestamp_seconds` | gauge | none |
 | `gaslit_dashboard_query_seconds` (added by [0022](0022-read-time-sums.md)) | histogram, 1 ms to 2.5 s, failures included | `query` (`overview`, `series`) |
+| `gaslit_totals_builds_total` (added by [0023](0023-tiered-totals.md)) | counter | `result` (`ok`, `locked`, `failed`) |
+| `gaslit_totals_build_seconds` (added by [0023](0023-tiered-totals.md)) | histogram, 1 ms to 2.5 s, failures included | none |
 
 - **Labels take fixed values only:** never project, account or key IDs, model names or
   anything a client sends. A test checks the scraped text for the IDs, the key and the model.

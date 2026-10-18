@@ -10,7 +10,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True, slots=True)
 class Entitlements:
     projects: int
-    retention_days: int
+    retention_days: int  # samples and hourly totals; per-minute detail is kept 2 days (ADR 0023)
     monthly_calls: int  # calls measured: the sum of the summaries' `count` (brief §19.4)
     # Protective limits per account, counted in records stored (summaries plus samples). The
     # SDK sends at most two records per call, so the cap is reached only by abuse.

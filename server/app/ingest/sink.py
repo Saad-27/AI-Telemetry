@@ -8,6 +8,7 @@ from uuid import UUID
 import asyncpg
 
 from app.db import DB_TIMEOUT_S
+from app.db.totals import late_buckets
 from app.ingest.schema import ERROR_CLASSES, Sample, Summary
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -93,6 +94,11 @@ def _insert(table: str, columns: Columns) -> str:
 
 _INSERT_SUMMARIES = _insert("summary_records", _SUMMARY_COLUMNS)
 _INSERT_SAMPLES = _insert("call_samples", _SAMPLE_COLUMNS)
+# Buckets whose dashboard totals may be built already, so need rebuilding (ADR 0023).
+_MARK_LATE = (
+    "INSERT INTO totals_stale (project_id, bucket) SELECT $1, unnest($2::timestamptz[]) "
+    "ON CONFLICT DO NOTHING"
+)
 
 
 def _time(ms: int) -> datetime:
@@ -142,14 +148,28 @@ class PostgresSink:
     async def write(
         self, project_id: UUID, summaries: Sequence[Summary], samples: Sequence[Sample]
     ) -> None:
-        # No transaction: every record has an idempotent id, so if the second insert fails,
-        # the SDK's retry of the whole batch only adds what is missing.
+        # No transaction: every record has an idempotent id, so if a later statement fails,
+        # the SDK's retry of the whole batch only adds what is missing. Late marks come right
+        # after their summaries, so a build that sees a mark also sees the summaries.
+        summary_rows = [_summary_row(s) for s in summaries]
+        late = late_buckets((_time(s.minute) for s in summaries), datetime.now(UTC))
         async with self._pool.acquire(timeout=DB_TIMEOUT_S) as conn:
-            for sql, rows, columns in (
-                (_INSERT_SUMMARIES, [_summary_row(s) for s in summaries], _SUMMARY_COLUMNS),
-                (_INSERT_SAMPLES, [_sample_row(s) for s in samples], _SAMPLE_COLUMNS),
-            ):
-                if rows:
-                    await conn.execute(
-                        sql, project_id, *_arrays(rows, columns), timeout=DB_TIMEOUT_S
-                    )
+            if summary_rows:
+                await self._insert(
+                    conn, _INSERT_SUMMARIES, project_id, summary_rows, _SUMMARY_COLUMNS
+                )
+            if late:
+                await conn.execute(_MARK_LATE, project_id, late, timeout=DB_TIMEOUT_S)
+            if samples:
+                sample_rows = [_sample_row(s) for s in samples]
+                await self._insert(conn, _INSERT_SAMPLES, project_id, sample_rows, _SAMPLE_COLUMNS)
+
+    @staticmethod
+    async def _insert(
+        conn: asyncpg.Connection,
+        sql: str,
+        project_id: UUID,
+        rows: list[dict[str, object]],
+        columns: Columns,
+    ) -> None:
+        await conn.execute(sql, project_id, *_arrays(rows, columns), timeout=DB_TIMEOUT_S)

@@ -1,6 +1,6 @@
 # 0020: Partition upkeep and retention run inside the app, once a day
 
-- **Status:** accepted
+- **Status:** accepted. Retention per table, and building totals before dropping: [0023](0023-tiered-totals.md)
 - **Date:** 2026-10-18
 
 ## Context
