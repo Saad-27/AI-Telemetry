@@ -4,6 +4,10 @@ Load-test results for `POST /v1/ingest` (brief §20.6). The method is in
 [ADR 0024](decisions/0024-load-test-method.md). Rerun the test at hosting (M3 step 8) and before
 each stage change (brief §20.3).
 
+The results are from before the fixes in
+[ADR 0025](decisions/0025-load-shedding-and-rejected-body-charges.md) (load shedding, charges for
+rejected bodies), except under "After the changes" at the end.
+
 ## Headline (local run, 2026-10-18; not yet on Fly and Neon)
 
 | Setup | Sustained, p95 under 200 ms | What limits it |
@@ -127,7 +131,7 @@ The junk was a mix of malformed JSON, a zip bomb (6 MB of zeros, 5.8 KB sent) an
 records. Every one was rejected correctly (400 or 413). They cost **0.75 of a core**, and real
 traffic's p95 rose to 140-850 ms.
 - **The zip bomb costs 11 ms of CPU**, inflated up to the 5 MB limit: 5× a normal request. It
-  needs a valid key, and the rate limiter charges it 1 token. So one free account (20 tokens/s,
+  needs a valid key, and the rate limiter charged it 1 token (since changed, see below). So one free account (20 tokens/s,
   bursts to 3,000) could keep a `shared-cpu-1x` machine's quota busy on its own (proposal 3).
 - 1,001 records cost 3.4 ms (gunzip and JSON parsing) before the 413.
 
@@ -164,40 +168,38 @@ cheap one, can wait up to about 170 ms for the CPU quota (proposal 5).
   across uvicorn, Starlette and FastAPI (about 40%) and asyncpg (about 15%). Logging is 3%,
   metrics 1%, our parsing and validation about 8%.
 
-## Proposals (for Saad; none built)
+## Decisions and changes (Saad, 2026-10-18)
 
-1. **Machine size (step 8).** `shared-cpu-1x` ($2.53/month in `fra`) keeps up about 25 req/s on
-   average. Each step up doubles the baseline:
-   - `shared-cpu-2x` 512 MB: $5.06/month, about 55 req/s;
-   - `shared-cpu-4x` 1 GB: $10.13/month, about 110 req/s.
+| # | Proposal | Outcome |
+|---|---|---|
+| 1 | Machine size | **Stay on `shared-cpu-1x`** ($2.53/month in `fra`) until there are many users. Watch CPU throttling in Fly's Grafana. When needed: `shared-cpu-2x` 512 MB ($5.06, ~55 req/s sustained) or `shared-cpu-4x` 1 GB ($10.13, ~110 req/s); prices from Fly's per-second rates, 2026-10-18. Still to measure at step 8: whether a machine that scales to zero starts with only the initial 5 s burst balance |
+| 2 | Shed load early | **Done** ([ADR 0025](decisions/0025-load-shedding-and-rejected-body-charges.md)). Past 50 requests in progress: `429 overloaded`, random 3-10 s `Retry-After`. 429 rather than 503, because the SDK keeps a batch after a 429 and drops it after three 5xx |
+| 3 | Rejected bodies cost their size | **Done** (ADR 0025). `MAX_DECOMPRESSED` 2 MB (a bomb now costs 4.8 ms, was 11). One rate-limit token per KB of a rejected body; corrupt gzip costs the cap |
+| 3b | Edge limits for floods | **Plan for step 8.** Cloudflare's per-IP rule (300 per 10 s) is in Terraform but is skipped while `*.fly.dev` is reachable (`security-config.md` §3). Close that gap, rerun the bad-key flood through Cloudflare, and add the app's per-IP limit on invalid keys |
+| 4 | Per-request limit per account | **Dropped.** Legitimate use should never be throttled by how it is spread over processes. A free account within its 1M calls a month sends about one request a second even across 50 processes, and the existing bucket already caps tiny requests at ~10 a second. Revisit only if Grafana shows an account abusing it |
+| 5 | Dashboard target on 0.25 CU | Open, for M4 |
+| 6 | Group inserts across requests | Later, once sustained traffic nears ~100 req/s |
+| 7 | Quiet client disconnects | Open (one-line fix) |
 
-   Prices are from Fly's per-second rates, 2026-10-18. A machine that scales to zero may start
-   with the initial 5 s balance, not a full one. Fly's docs don't say, so measure it at step 8.
-   Launch traffic should fit `shared-cpu-1x`. Watch CPU throttling in Fly's Grafana.
-2. **Shed load early instead of collapsing.** Cap the requests waiting for a database connection
-   (say 50) and answer 503 with `Retry-After` right away beyond that. Throughput then stays at
-   its maximum, and the SDK backs off. It is a small change in `routes.py`.
-3. **Make rejected bodies cost what they cost.** Lower `MAX_DECOMPRESSED` from 5 MB to 2 MB. The
-   largest valid body, 1,000 records, is about 0.7 MB. Also charge the rate limiter by
-   decompressed size for 400s and 413s. Then zip bombs can't use a machine's CPU for free.
-4. **Per-request limits per account.** Requests, not records, cost the most, yet the limit
-   counts records (20/s). An account that sends one record per request can make 10 requests a
-   second, a third of a throttled machine. Add a request bucket per account. The SDK sends about
-   0.2 req/s per process, so 2 req/s with bursts of 60 would allow 10 busy processes per account.
+### After the changes (same local stack)
 
-   Proposals 3 and 4 revisit ADR 0017's limits, which the handoff said to re-check after this
-   test.
-5. **Dashboard target on 0.25 CU.** Choose one:
-   - accept about 200 ms for 24 h and 7 d charts at launch;
-   - let Neon autoscale from 0.25 CU to 1 CU, paying more only while busy;
-   - cache chart responses for buckets that are already complete (planned for M4 anyway);
-   - make the chart query cheaper (it sums 54 histogram buckets a row).
-6. **Group inserts across requests**, only once sustained traffic nears about 100 req/s.
-   Batched records cost the database about a tenth as much each, so this is the big lever on
-   database capacity before a larger Neon compute.
-7. **Quiet client disconnects.** A client that gives up mid-body raises `ClientDisconnect` in
-   `_read`, which logs a full traceback (832 of them in one overload run). Catch it and count it
-   as a reason code. This is a one-line fix.
+**Overload no longer collapses** (app on 1 core):
+
+| Rate | Stored | 202 / 429 `overloaded` | p50 / p95 (ms) | Before |
+|---|---|---|---|---|
+| 150 req/s | 332 records/s | 98% / 2% | 11 / 263 | same |
+| 200 req/s | 363 records/s | 80% / 20% | 231 / 523 | 442 records/s, p95 2,690, 2% 503 |
+| 300 req/s | 287 records/s | 42% / 58% | 5 / 609 | **~10 records/s**, nearly all timed out |
+| 400 req/s | 319 records/s | 35% / 65% | 5 / 561 | not run |
+
+No timeouts and no 503s; a shed request is answered in about 5 ms. Accepted requests wait up to
+about 0.5 s (p95) while shedding: 50 in progress at the database's pace. The SDK retries shed
+requests 3-10 s later with its batch kept. The warm-up also shed a few requests (55) while the
+1,000 keys were each looked up for the first time, as after a restart.
+
+**Junk from 10 accounts, 100/s, with 50 req/s of real traffic:** about 40 junk bodies were
+answered 400 or 413; the next ~4,460 got `429 rate_limited` before their body was read. App CPU
+0.33 (was 0.87); real traffic p95 24 ms (was 140-850 ms), every request stored.
 
 ## How to rerun
 

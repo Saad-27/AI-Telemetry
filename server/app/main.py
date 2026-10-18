@@ -38,6 +38,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.keys = KeyStore(app.state.pool, keep=quota.blocks, learn=quota.learn)
         app.state.sink = PostgresSink(app.state.pool)
         app.state.rate = RateLimiter()
+        app.state.in_flight = 0  # ingest requests being handled; capped to shed load (ADR 0025)
         # The dashboard's totals, built while this machine receives summaries (ADR 0023).
         totals = app.state.totals = Totals(app.state.pool)
         flusher = asyncio.create_task(quota.flush_every())

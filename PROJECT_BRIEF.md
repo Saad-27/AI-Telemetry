@@ -675,7 +675,7 @@ These run **inside the user's infrastructure with their own provider key**, as a
 
 **Headers:** `Authorization: Bearer gl_live_...`, `Content-Type: application/json`, optional `Content-Encoding: gzip`, `User-Agent`.
 
-**Limits:** ≤ 1 MB compressed, ≤ 5 MB decompressed (stream-decompress with a hard cap to guard against zip bombs), ≤ 1,000 records (summaries plus samples) per batch.
+**Limits:** ≤ 1 MB compressed, ≤ 2 MB decompressed (5 MB until the M3 load test, [ADR 0025](docs/decisions/0025-load-shedding-and-rejected-body-charges.md); stream-decompress with a hard cap to guard against zip bombs), ≤ 1,000 records (summaries plus samples) per batch.
 
 **Processing steps:**
 
@@ -1108,12 +1108,12 @@ Both must be protected. The checklist in 11.11 must be fully ticked before publi
 - **Isolation:** its own hostname behind Cloudflare, with no cookies and no CORS.
 - **Reject early, before any heavy work:**
   - check `Content-Length` (≤ 1 MB)
-  - stream-decompress gzip with a hard 5 MB cap
+  - stream-decompress gzip with a hard 2 MB cap; a rejected body is charged to the account's rate limit by its size ([ADR 0025](docs/decisions/0025-load-shedding-and-rejected-body-charges.md))
   - check key format and checksum before any database work
   - apply a per-IP rate limit to invalid-key attempts
 - **Strict schema** (Section 6.4): `extra="forbid"`, enums, regexes, numeric ranges and a timestamp window. This guarantees no content-like or oversized strings can be stored, and protects the dashboard from stored XSS.
 - **SQL:** parameterised only. Never build SQL from strings.
-- **Back-pressure:** request timeouts and bounded concurrency. If the database is slow, return `503` with `Retry-After` instead of queueing without limit.
+- **Back-pressure:** request timeouts and bounded concurrency. If the database is slow, return `503` with `Retry-After` instead of queueing without limit. **Built in M3 step 7** ([ADR 0025](docs/decisions/0025-load-shedding-and-rejected-body-charges.md)): past 50 requests in progress, ingest answers `429 overloaded` with a random 3-10 s `Retry-After`, because the SDK keeps a batch after a 429 but drops it after three 5xx. A slow or unreachable database still gets `503`.
 - **Database role:** INSERT on events, and minimal SELECT on keys and projects. No other writes except `last_used_at`.
 
 ### 11.6 Multi-tenant isolation and data protection

@@ -1,14 +1,15 @@
 """POST /v1/ingest (brief §9.2, §11.5, ADR 0016).
 
-Cheapest checks first: headers, then the key (format and checksum before any database work),
-then the quota and rate limit (from memory, ADR 0017), then the body under hard size caps, then
-validation, then one insert per record type.
+Cheapest checks first: headers, then whether the machine is keeping up (ADR 0025), then the key
+(format and checksum before any database work), then the quota and rate limit (from memory,
+ADR 0017), then the body under hard size caps, then validation, then one insert per record type.
 Logs never include bodies, keys, headers or driver error text: only codes, counts and types.
 Every answer is counted in the metrics by status and reason code (ADR 0021).
 """
 
 import logging
 import math
+import random
 import time
 import zlib
 
@@ -25,7 +26,17 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_BODY = 1_000_000  # bytes as sent (gzipped or not)
-MAX_DECOMPRESSED = 5_000_000
+MAX_DECOMPRESSED = 2_000_000  # the SDK's largest batch, 1,000 records, is about 0.7 MB
+# A rejected body is charged to the rate limit at one token per this many bytes read or inflated,
+# about a record's worth, so payloads only a hand-made client sends (a zip bomb costs ~5 ms of
+# CPU) use up the sender's allowance rather than the machine (ADR 0025).
+REJECTED_BYTES_PER_TOKEN = 1_000
+# Requests between the shed check and their answer. Past this the machine is behind, so new
+# requests are turned away at once rather than queued until their clients give up, which made
+# overloaded ingest store almost nothing (docs/capacity.md). 429, not 503: after a 429 the SDK
+# keeps the batch and waits Retry-After; after three 5xx it drops it (ADR 0025).
+MAX_IN_FLIGHT = 50
+SHED_RETRY_AFTER_S = (3, 10)  # chosen at random, so shed SDKs do not all come back at once
 MAX_RECORDS = 1_000  # summaries plus samples; over it, 413 makes the SDK split the batch
 RETRY_AFTER_S = "5"
 # Over quota, SDKs check back this often rather than at the reset, so an account that upgrades
@@ -55,40 +66,60 @@ async def ingest(request: Request) -> JSONResponse:
     if encoding not in ("gzip", "identity"):
         return _reply(started, 415, "unsupported_encoding")
 
-    key = _bearer(headers.get("authorization"))
+    state = request.app.state
+    if state.in_flight >= MAX_IN_FLIGHT:
+        wait = random.randint(*SHED_RETRY_AFTER_S)  # noqa: S311 (spreading retries)
+        return _reply(started, 429, "overloaded", {"Retry-After": str(wait)})
+    state.in_flight += 1
     try:
-        found = await request.app.state.keys.resolve(key) if key else None
+        return await _ingest(request, encoding, started)
+    finally:
+        state.in_flight -= 1
+
+
+async def _ingest(request: Request, encoding: str, started: float) -> JSONResponse:
+    state = request.app.state
+    key = _bearer(request.headers.get("authorization"))
+    try:
+        found = await state.keys.resolve(key) if key else None
     except Exception as exc:
         return _unavailable(started, exc)
     if found is None:
         return _reply(started, 401, "invalid_key", {"WWW-Authenticate": "Bearer"})
     limits = entitlements(found.plan)
-    state = request.app.state
     if wait := state.quota.wait_s(found.user_id, limits):
         wait = min(wait, QUOTA_RETRY_AFTER_S)
         return _reply(started, 429, "quota_exceeded", {"Retry-After": _seconds(wait)})
     if wait := state.rate.wait_s(found.user_id, limits):
         return _reply(started, 429, "rate_limited", {"Retry-After": _seconds(wait)})
 
+    def rejected(status: int, code: str, size: int) -> JSONResponse:
+        state.rate.charge(found.user_id, math.ceil(size / REJECTED_BYTES_PER_TOKEN))
+        return _reply(started, status, code)
+
     body = await _read(request, MAX_BODY)
-    if body is not None and encoding == "gzip":
-        try:
-            body = _gunzip(body, MAX_DECOMPRESSED)
-        except (zlib.error, ValueError):
-            return _reply(started, 400, "bad_gzip")
     if body is None:
-        return _reply(started, 413, "too_large")
+        return rejected(413, "too_large", MAX_BODY)
+    if encoding == "gzip":
+        try:
+            inflated = _gunzip(body, MAX_DECOMPRESSED)
+        except (zlib.error, ValueError):
+            # How much was inflated before the fault is unknown: charged as the most.
+            return rejected(400, "bad_gzip", MAX_DECOMPRESSED)
+        if inflated is None:
+            return rejected(413, "too_large", MAX_DECOMPRESSED)
+        body = inflated
     try:
         data = pydantic_core.from_json(body, allow_inf_nan=False)
     except ValueError:
-        return _reply(started, 400, "malformed_json")
+        return rejected(400, "malformed_json", len(body))
     try:
         envelope = Envelope.model_validate(data)
     except ValidationError:
-        return _reply(started, 400, "invalid_envelope")
+        return rejected(400, "invalid_envelope", len(body))
     sent = len(envelope.summaries) + len(envelope.samples)
     if sent > MAX_RECORDS:
-        return _reply(started, 413, "too_many_records")
+        return rejected(413, "too_many_records", len(body))
     state.rate.charge(found.user_id, sent)
 
     records = validate_records(envelope, now_ms=time.time_ns() // 1_000_000)

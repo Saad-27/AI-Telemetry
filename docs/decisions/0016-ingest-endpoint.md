@@ -1,6 +1,6 @@
 # 0016: The ingest endpoint: checks, responses and writes
 
-- **Status:** accepted
+- **Status:** accepted; gunzip cap (now 2 MB), charges for rejected bodies and load shedding amended by [0025](0025-load-shedding-and-rejected-body-charges.md)
 - **Date:** 2026-10-17
 
 ## Context
