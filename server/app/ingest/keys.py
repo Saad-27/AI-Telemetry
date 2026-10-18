@@ -12,6 +12,7 @@ import time
 import zlib
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 from uuid import UUID
 
 import asyncpg
@@ -28,15 +29,17 @@ _SHAPE = re.compile(f"{PREFIX}[0-9A-Za-z]{{{BODY_LEN + CHECK_LEN}}}")
 CACHE_TTL_S = 60.0  # a revoked key stops working within this (brief §11.4)
 CACHE_MAX = 10_000
 
-# One round trip finds a live key and its account's plan, and marks the key used, so
-# `last_used_at` is written at most once per key per cache period (brief §9.2 step 7). Unknown
-# and revoked keys, and keys of deleted projects, match no row.
+# One round trip finds a live key, its account's plan and the account's usage this UTC month,
+# and marks the key used, so `last_used_at` is written at most once per key per cache period
+# (brief §9.2 step 7). Unknown and revoked keys, and keys of deleted projects, match no row.
 _TOUCH = """
     UPDATE ingest_keys k SET last_used_at = now()
     FROM projects p JOIN users u ON u.id = p.owner_user_id
+    LEFT JOIN monthly_usage m
+      ON m.user_id = u.id AND m.month = date_trunc('month', now() AT TIME ZONE 'UTC')::date
     WHERE k.key_hash = $1 AND k.revoked_at IS NULL
       AND p.id = k.project_id AND p.deleted_at IS NULL
-    RETURNING k.id, k.project_id, u.id AS user_id, u.plan
+    RETURNING k.id, k.project_id, u.id AS user_id, u.plan, m.month, m.calls, m.records
 """
 
 
@@ -90,11 +93,24 @@ class IngestKey:
     plan: str
 
 
+def _never(key: IngestKey) -> bool:
+    return False
+
+
+def _ignore(user_id: UUID, month: date, calls: int, records: int) -> None:
+    return None
+
+
 class KeyStore:
     """Resolves keys to their project and caches each key found for CACHE_TTL_S.
 
     Keys not found are not cached: the SDK stops sending after a 401, so they rarely repeat,
     and made-up keys cannot push real ones out of the cache.
+
+    Ingest connects it to the quota (ADR 0019). An expired entry is still served while
+    `keep(key)` is true, which holds while the key's account is over quota, so an SDK checking
+    back each minute never reaches the database. Each lookup passes the account's usage this
+    month to `learn`, so a machine that has just started blocks an account at once.
     """
 
     def __init__(
@@ -103,17 +119,22 @@ class KeyStore:
         ttl_s: float = CACHE_TTL_S,
         max_entries: int = CACHE_MAX,
         clock: Callable[[], float] = time.monotonic,
+        keep: Callable[[IngestKey], bool] = _never,
+        learn: Callable[[UUID, date, int, int], None] = _ignore,
     ) -> None:
         self._pool = pool
         self._ttl_s = ttl_s
         self._max_entries = max_entries
         self._clock = clock
+        self._keep = keep
+        self._learn = learn
         # Key hash -> (expiry, key). Oldest first, so eviction pops the first entry.
         self._cache: dict[bytes, tuple[float, IngestKey]] = {}
 
     async def resolve(self, key: str) -> IngestKey | None:
         """The key's project and account, or None if the key is malformed, unknown or revoked,
-        or its project deleted. A plan change, like a revocation, applies within CACHE_TTL_S.
+        or its project deleted. A plan change, like a revocation, applies within CACHE_TTL_S,
+        unless `keep` holds the entry.
 
         Database errors propagate and are not cached: an outage must not look like a bad key.
         """
@@ -122,7 +143,7 @@ class KeyStore:
         key_hash = hash_key(key)
         now = self._clock()
         cached = self._cache.get(key_hash)
-        if cached is not None and cached[0] > now:
+        if cached is not None and (cached[0] > now or self._keep(cached[1])):
             return cached[1]
         async with self._pool.acquire(timeout=DB_TIMEOUT_S) as conn:
             row = await conn.fetchrow(_TOUCH, key_hash, timeout=DB_TIMEOUT_S)
@@ -130,6 +151,8 @@ class KeyStore:
         if row is None:
             return None
         found = IngestKey(row["id"], row["project_id"], row["user_id"], row["plan"])
+        if row["month"] is not None:
+            self._learn(found.user_id, row["month"], row["calls"], row["records"])
         if len(self._cache) >= self._max_entries:
             del self._cache[next(iter(self._cache))]
         # Expiry counts from before the query, so a revocation is never served for longer.

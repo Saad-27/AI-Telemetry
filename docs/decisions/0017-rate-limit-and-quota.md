@@ -1,6 +1,6 @@
 # 0017: Per-account rate limit and monthly quota, sized to the database bill
 
-- **Status:** accepted
+- **Status:** accepted; blocked accounts amended by [0019](0019-blocked-accounts-from-memory.md)
 - **Date:** 2026-10-17
 
 ## Context

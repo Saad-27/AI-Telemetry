@@ -2,6 +2,7 @@
 
 import hashlib
 import uuid
+from datetime import date
 from types import TracebackType
 from typing import Any
 
@@ -103,8 +104,21 @@ class Clock:
         return self.now
 
 
-def found() -> dict[str, Any]:
-    return {"id": uuid.uuid4(), "project_id": uuid.uuid4(), "user_id": uuid.uuid4(), "plan": "free"}
+def found(usage: tuple[date, int, int] | None = None) -> dict[str, Any]:
+    month, calls, records = usage or (None, None, None)
+    return {
+        "id": uuid.uuid4(),
+        "project_id": uuid.uuid4(),
+        "user_id": uuid.uuid4(),
+        "plan": "free",
+        "month": month,
+        "calls": calls,
+        "records": records,
+    }
+
+
+def key_of(row: dict[str, Any]) -> IngestKey:
+    return IngestKey(row["id"], row["project_id"], row["user_id"], row["plan"])
 
 
 @pytest.fixture
@@ -127,8 +141,7 @@ async def test_malformed_key_never_reaches_the_database(pool: FakePool) -> None:
 @pytest.mark.anyio
 async def test_found_key_is_cached_until_expiry(pool: FakePool, clock: Clock) -> None:
     store = KeyStore(pool, ttl_s=60, clock=clock)
-    row = pool.rows[KEY.key_hash]
-    expected = IngestKey(**row)
+    expected = key_of(pool.rows[KEY.key_hash])
     assert await store.resolve(KEY.key) == expected
     del pool.rows[KEY.key_hash]  # revoked
     clock.now += 59.9
@@ -174,3 +187,32 @@ async def test_database_errors_propagate_and_are_not_cached(pool: FakePool) -> N
     pool.error = None
     assert await store.resolve(KEY.key) is not None
     assert pool.queries == 2
+
+
+@pytest.mark.anyio
+async def test_expired_entry_is_served_while_keep_holds_it(pool: FakePool, clock: Clock) -> None:
+    held: set[IngestKey] = set()
+    store = KeyStore(pool, ttl_s=60, clock=clock, keep=held.__contains__)
+    expected = key_of(pool.rows[KEY.key_hash])
+    assert await store.resolve(KEY.key) == expected
+    held.add(expected)  # its account went over quota
+    del pool.rows[KEY.key_hash]
+    clock.now += 3600
+    assert await store.resolve(KEY.key) == expected
+    assert pool.queries == 1
+    held.clear()  # a new month, or the upgrade flow called Quota.unblock
+    assert await store.resolve(KEY.key) is None
+    assert pool.queries == 2
+
+
+@pytest.mark.anyio
+async def test_lookups_pass_this_months_usage_on(pool: FakePool, clock: Clock) -> None:
+    learned: list[tuple[uuid.UUID, date, int, int]] = []
+    store = KeyStore(pool, ttl_s=60, clock=clock, learn=lambda *usage: learned.append(usage))
+    await store.resolve(KEY.key)  # no usage yet this month
+    assert learned == []
+    pool.rows[KEY.key_hash] |= {"month": date(2026, 10, 1), "calls": 5, "records": 9}
+    await store.resolve(KEY.key)  # cached: nothing new
+    clock.now += 60
+    await store.resolve(KEY.key)
+    assert learned == [(pool.rows[KEY.key_hash]["user_id"], date(2026, 10, 1), 5, 9)]

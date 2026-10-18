@@ -1,14 +1,15 @@
-"""Rate limit and quota logic without a database (ADR 0017). Flushes are in test_limits_db.py;
-the 429 responses in test_ingest.py."""
+"""Rate limit and quota logic without a database (ADR 0017, ADR 0019). Flushes are in
+test_limits_db.py; the 429 responses in test_ingest.py."""
 
 import dataclasses
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, NoReturn
 
 import pytest
 
 from app.core.entitlements import FREE, entitlements
+from app.ingest.keys import IngestKey
 from app.ingest.limits import Quota, RateLimiter
 
 pytestmark = pytest.mark.anyio
@@ -89,6 +90,38 @@ def test_records_have_their_own_cap() -> None:
     assert quota.wait_s(KEY, LIMITS) == 0
     quota.add(KEY, 0, 1)
     assert quota.wait_s(KEY, LIMITS) > 0
+
+
+def test_learned_totals_block_at_once() -> None:
+    # A machine that has just started learns them from the key lookup.
+    quota = Quota(Down(), clock=lambda: at(2026, 10, 17))
+    quota.learn(KEY, date(2026, 9, 1), 100, 0)  # last month's
+    assert quota.wait_s(KEY, LIMITS) == 0
+    quota.learn(KEY, date(2026, 10, 1), 99, 0)
+    quota.add(KEY, 1, 1)
+    assert quota.wait_s(KEY, LIMITS) > 0
+
+
+def test_an_older_answer_never_lowers_the_totals() -> None:
+    # A key lookup and a flush can return out of order.
+    quota = Quota(Down(), clock=lambda: at(2026, 10, 17))
+    quota.learn(KEY, date(2026, 10, 1), 100, 3)
+    quota.learn(KEY, date(2026, 10, 1), 90, 5)
+    quota.learn(KEY, date(2026, 9, 1), 0, 0)
+    assert quota.wait_s(KEY, LIMITS) > 0
+    assert quota.wait_s(KEY, dataclasses.replace(LIMITS, monthly_calls=101)) == 0
+
+
+def test_blocks_reads_the_keys_plan_and_unblock_forgets() -> None:
+    quota = Quota(Down(), clock=lambda: at(2026, 10, 17))
+    key = IngestKey(uuid.uuid4(), uuid.uuid4(), KEY, "free")
+    quota.learn(KEY, date(2026, 10, 1), FREE.monthly_calls - 1, 0)
+    assert not quota.blocks(key)
+    quota.learn(KEY, date(2026, 10, 1), FREE.monthly_calls, 0)
+    assert quota.blocks(key)
+    assert quota.blocks(dataclasses.replace(key, plan="unknown"))  # the free plan's limits
+    quota.unblock(KEY)
+    assert not quota.blocks(key)  # until the key lookup returns the totals again
 
 
 async def test_failed_flush_keeps_the_counts() -> None:

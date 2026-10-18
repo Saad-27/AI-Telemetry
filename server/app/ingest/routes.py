@@ -27,8 +27,8 @@ MAX_DECOMPRESSED = 5_000_000
 MAX_RECORDS = 1_000  # summaries plus samples; over it, 413 makes the SDK split the batch
 RETRY_AFTER_S = "5"
 # Over quota, SDKs check back this often rather than at the reset, so an account that upgrades
-# (picked up by the key cache within 60 s) resumes sending within about two minutes. Each check
-# is answered from memory.
+# resumes sending at its next check once the upgrade flow calls Quota.unblock. Each check is
+# answered from memory, with no key lookup (ADR 0019).
 QUOTA_RETRY_AFTER_S = 60
 
 

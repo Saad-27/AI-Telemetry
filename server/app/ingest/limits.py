@@ -1,8 +1,9 @@
-"""The per-account rate limit and monthly quota (brief §7.2, §9.2 step 3, ADR 0017).
+"""The per-account rate limit and monthly quota (brief §7.2, §9.2 step 3, ADR 0017, ADR 0019).
 
 Both are checked from memory, so a request costs no extra database call. The rate limit lives
 only in this process. The quota is counted here and added to `monthly_usage` every FLUSH_S;
-each flush returns the stored totals, which include other machines' counts.
+each flush, and each key lookup, returns the stored totals, which include other machines'
+counts.
 """
 
 import asyncio
@@ -14,8 +15,9 @@ from uuid import UUID
 
 import asyncpg
 
-from app.core.entitlements import Entitlements
+from app.core.entitlements import Entitlements, entitlements
 from app.db import DB_TIMEOUT_S
+from app.ingest.keys import IngestKey
 
 log = logging.getLogger(__name__)
 
@@ -81,9 +83,10 @@ class Quota:
     """Calls measured and records stored per account per UTC month, against `monthly_calls`
     and `monthly_records`.
 
-    An account is over once a stored total, as of this process's last flush, plus the counts
-    not yet flushed reach either limit. Totals only grow within a month, so a stale one never
-    blocks too early; it unblocks when the month ends or the plan's limits rise.
+    An account is over once a stored total, as of this process's last flush or key lookup,
+    plus the counts not yet flushed reach either limit. Totals only grow within a month, so a
+    stale one never blocks too early. It unblocks when the month ends, or when `unblock` is
+    called and the next key lookup returns higher limits (ADR 0019).
     """
 
     def __init__(self, pool: asyncpg.Pool, clock: Callable[[], float] = time.time) -> None:
@@ -107,6 +110,27 @@ class Quota:
         ):
             return 0.0
         return (_next_month(month) - now).total_seconds()
+
+    def blocks(self, key: IngestKey) -> bool:
+        """Whether the key's account is over quota. While it is, the key store serves the key
+        from memory past its expiry, so the account's checks never reach the database."""
+        return self.wait_s(key.user_id, entitlements(key.plan)) > 0
+
+    def learn(self, user_id: UUID, month: date, calls: int, records: int) -> None:
+        """Stored totals, from a flush or the key lookup. They only grow within a month, so the
+        larger of two answers for the same month is the newer one."""
+        known = self._stored.get(user_id)
+        if known is None or known[0] < month:
+            self._stored[user_id] = (month, calls, records)
+        elif known[0] == month:
+            self._stored[user_id] = (month, max(known[1], calls), max(known[2], records))
+
+    def unblock(self, user_id: UUID) -> None:
+        """Forgets the account's totals, so its next request looks its key up again and is
+        checked against its plan's limits as they are now. The upgrade flow (M4 or the paid
+        tier) must call this on every ingest machine: until then, an account over quota keeps
+        its old plan until the month ends."""
+        self._stored.pop(user_id, None)
 
     def add(self, user_id: UUID, calls: int, records: int) -> None:
         if calls or records:
@@ -139,9 +163,7 @@ class Quota:
                 self._add_pending(key, calls, records)
             raise
         for row in rows:
-            known = self._stored.get(row["user_id"])
-            if known is None or known[0] <= row["month"]:
-                self._stored[row["user_id"]] = (row["month"], row["calls"], row["records"])
+            self.learn(row["user_id"], row["month"], row["calls"], row["records"])
 
     async def flush_logged(self) -> None:
         try:
