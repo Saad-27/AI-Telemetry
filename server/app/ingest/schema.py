@@ -46,8 +46,15 @@ MAX_MS = 3_600_000
 TTFT_TOLERANCE_MS = 1.0  # the SDK rounds ttft and duration separately
 PAST_MS = 24 * 3_600_000
 FUTURE_MS = 5 * 60_000
-LATENCY_BUCKETS = 20
-DECODE_BUCKETS = 14
+# Upper bounds of the histogram buckets (brief §9.4), upper-inclusive (ADR 0003). Each
+# histogram has one more bucket, for +inf.
+LATENCY_BOUNDS_MS = (
+    25, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000,
+    3000, 5000, 7500, 10000, 15000, 20000, 30000, 60000, 120000,
+)  # fmt: skip
+DECODE_BOUNDS_TPS = (5, 10, 20, 30, 40, 60, 80, 100, 150, 200, 300, 500, 1000)
+LATENCY_BUCKETS = len(LATENCY_BOUNDS_MS) + 1
+DECODE_BUCKETS = len(DECODE_BOUNDS_TPS) + 1
 
 # Hosts the SDK may report (ADR 0009). Azure arrives with the customer's subdomain stripped.
 _HOSTS = frozenset(

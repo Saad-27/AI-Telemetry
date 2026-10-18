@@ -1668,7 +1668,7 @@ This section defines the **wire format**, meaning what the SDK sends. It must be
   - `unnest ... WITH ORDINALITY` with `GROUP BY`
   - summing in the worker's Python code
 
-  Pick the simplest that performs well in the load test, and record it in an ADR.
+  Pick the simplest that performs well in the load test, and record it in an ADR. **Chosen: one `sum()` per bucket, the fastest measured ([ADR 0022](docs/decisions/0022-read-time-sums.md)).**
 
 **Quotas:** user-facing limits count **calls measured** (the sum of `count`). Protective limits also apply to records and requests.
 

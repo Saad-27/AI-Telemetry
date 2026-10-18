@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-18 (M3 steps 1-5 and the blocked-accounts fix merged: PRs #34-#36; step 6 next)
+**Last updated:** 2026-10-18 (M3 step 6 in a PR: read-time sums and the end-to-end test; step 7 next)
 
 ## Where the project is
 
@@ -19,9 +19,10 @@ session, in the same PR as the session's other changes, so it reaches `main`.
   printed `GASLIT_KEY` (`examples/README.md`).
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M3** (ingest and storage), plan below. Steps 1-5 are merged, with the
-  blocked-accounts fix (#34; step 5 was #35 and #36). Step 6 is next. Hosting is the last
-  step; confirm costs with Saad first.
+- **In progress: M3** (ingest and storage), plan below. Steps 1-5 are merged (#32-#36). Step 6
+  (read-time sums, end-to-end test) is in a PR from branch `m3-read-sums`. **Waiting on Saad:**
+  the latency target and the 7-day fix in ADR 0022. Step 7 (load test) is next. Hosting is the
+  last step; confirm costs with Saad first.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -43,6 +44,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0019 | Accounts over quota are answered from memory: an expired cached key is kept while its account is blocked, so SDKs' checks every minute never reach the database. The key lookup also returns this month's usage, so a new machine blocks at once. `Quota.unblock(user_id)` is for the upgrade flow, which must call it on every ingest machine |
 | 0020 | Partition upkeep and retention run inside the app: at startup, then once per UTC day (hourly date check), under an advisory lock, `lock_timeout` 1 s. Days before today − `longest_retention_days()` are dropped, so rows live 7-8 days. Needs the table owner: how, once the app stops being the owner, is a step 8 decision |
 | 0021 | Prometheus metrics with `prometheus_client` on their own port (`METRICS_PORT`, 9091), scraped by Fly into its free Prometheus/Grafana; never on the public port; labels fixed codes only. Requests by status and reason, latency, records, batch size, insert time, key lookups that reach the DB, quota flushes, last partition run |
+| 0022 | Dashboard reads: one `sum()` per histogram bucket (5× faster than `unnest`, 20× faster than a SQL aggregate), behind `MetricsRepository` (`overview`, `series`, `Filters`). Each read is a read-only transaction that sets `app.project_id` for RLS. `quantile()` interpolates inside buckets. ~5 µs per summary read. **Proposed, for Saad:** p95 under 100 ms per query; hourly totals for hours over 24 h old (they can't change) to fix 7-day reads of busy accounts (620 → 68 ms) |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -115,8 +117,26 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    takes 0.5 s). ~7 µs per accepted request. **At hosting:** set the Grafana alerts listed in
    `deploy.md` step 2; check whether Fly's scrapes keep a machine running. Dashboard query
    latency comes with step 6.
-6. **Read-time sums** (repository layer) and the end-to-end test: example app → rows → sums
-   (also catches the server's enum and host copies drifting from the SDK's).
+6. **Read-time sums: DONE, in a PR** (`server/app/dashboard/repository.py`, ADR 0022).
+   `MetricsRepository(pool)`: `overview(project, start, end, filters)` per provider, route
+   and model; `series(..., step, filters)` per step and input bucket. Returns `Sums` named as
+   in the summary record. `quantile(hist, bounds, q)` (None under 20 values). Histogram bounds
+   now in `app.ingest.schema`. Metric `gaslit_dashboard_query_seconds{query}`. Not wired into
+   the app yet: M4's routes create it in the lifespan.
+   **End-to-end test** (`tests/test_end_to_end.py`): starts the app under uvicorn on a free
+   port, runs every example with `uv run --locked` in `sdk/python` and
+   `GASLIT_ENDPOINT`/`GASLIT_KEY` set, then checks every printed record is stored and the
+   repository's sums (as `dashboard_app`) equal the payloads' sums by model and by minute.
+   Also compares the server's provider/route enums, host allowlist and bounds with the SDK's
+   tables. Takes ~8 s. CI's server job now syncs the SDK environment too.
+   **Measured** (ADR 0022, local, warm, one core): ~5 µs per summary in range. Typical account
+   (20k summaries a week): 2 / 14 / 107 ms for 1 h / 24 h / 7 d. Busy (121k): 6 / 93 / 651.
+   **Open, for Saad:** (a) the target, proposed p95 under 100 ms per query; (b) 7-day reads
+   of busy accounts miss it. Proposed fix: hourly totals for hours older than 24 h, which
+   ingest can no longer change, built by the daily partition job (no extra cost) or hourly
+   (~$1.60/month more on Neon). Measured 68 ms instead of 620 ms. `rollups_1m` would not help
+   7-day charts. The benchmark scripts were throwaway (session scratchpad); step 7's load
+   test should time the repository on Neon at 0.25 CU.
 7. **Load test**, results in `docs/capacity.md`.
 8. **Hosting** (runbook steps 2-6), with login roles created by SQL and granted
    `ingest_writer`/`dashboard_app`. Confirm costs with Saad first.
@@ -135,8 +155,8 @@ to change** (switching range, filters or pages should feel instant). Both count 
   detail pages), no layout shift while loading, cached responses so changing a filter only
   fetches what changed.
 - **It starts in M3.** The dashboard reads by summing `summary_records` (ADR 0008), so step 6's
-  queries decide how fast a range or filter change is. Propose a latency target to Saad in
-  step 6 and measure it in the step 7 load test.
+  queries decide how fast a range or filter change is. Target proposed in ADR 0022 (p95 under
+  100 ms per query, awaiting Saad); measure it in the step 7 load test.
 - Keep the frontend simple to change: few small components, no UI framework sprawl.
 - **Show recovery quickly (Saad).** When a provider comes back, the dashboard must say so within
   minutes, not after the 15-minute badge window: a "recovering" badge once the last 2 complete
@@ -226,6 +246,8 @@ source, not memory, before relying on it (brief §17).
   before the first real release (0.1.0, M7).
 - Neon connection strings include `channel_binding=require`; asyncpg forwards it to Postgres,
   which rejects it. Remove it from `DATABASE_URL` (runbook step 2).
+- The server's tests include `test_end_to_end.py`, which runs the examples through `uv run`
+  in `sdk/python`, so they need `uv` and the SDK's locked environment (synced on first run).
 - `make test` needs Docker for the server's database tests. Cloud sessions have no Docker: run
   `uv run pytest` in `sdk/python`, and in `server` with `-m "not db"`. On 2026-10-18 `docker`
   was not on the WSL path (Docker Desktop not running or its WSL integration off), so the DB

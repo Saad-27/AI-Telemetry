@@ -25,7 +25,7 @@ How to apply a setting is in [deploy.md](deploy.md).
 
 | Requirement | Why | Status |
 |---|---|---|
-| RLS on `summary_records` and `call_samples`; dashboard queries run in a transaction with `SET LOCAL app.project_id` | A missed `WHERE project_id = ...` cannot return another tenant's rows | **Done** in the schema (ADR 0013); takes effect with the roles above |
+| RLS on `summary_records` and `call_samples`; dashboard queries run in a transaction with `SET LOCAL app.project_id` | A missed `WHERE project_id = ...` cannot return another tenant's rows | **Done** in the schema (ADR 0013) and the dashboard reads (ADR 0022); takes effect with the roles above |
 | Grants only on the partitioned parents, never on partitions | RLS applies through the parent only. Direct access to a partition would skip it | **Done** |
 | `ingest_writer` cannot read data, users' details or key prefixes. It reads only `projects (id, owner_user_id, deleted_at)`, `users (id, plan)` and `monthly_usage` | A leaked or buggy ingest process cannot be used to read tenants' data | **Done**, tested (ADR 0017) |
 | Expired days are dropped automatically: summaries and samples are kept 7 to 8 days | Retention is a privacy promise (brief §7.2, §11.6) | **Done** (ADR 0020), tested. Runs while the app runs: after a spell with no traffic at all, at the next start |

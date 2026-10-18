@@ -43,6 +43,13 @@ KEY_LOOKUPS = Counter(
 QUOTA_FLUSHES = Counter(
     "gaslit_quota_flushes", "Usage flushes to monthly_usage, by result.", ["result"]
 )
+DASHBOARD_QUERY_SECONDS = Histogram(
+    "gaslit_dashboard_query_seconds",
+    "Time to run one dashboard read, by query, failures included. Its p95 over 300 ms is when "
+    "pre-summed data is needed (ADR 0008).",
+    ["query"],
+    buckets=_LATENCY,
+)
 PARTITIONS_MAINTAINED = Gauge(
     "gaslit_partitions_last_success_timestamp_seconds",
     "When this machine last finished partition upkeep. Partitions run out 7 days after it.",
