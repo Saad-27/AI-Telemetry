@@ -8,7 +8,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.core.config import Settings, load_settings
+from app.core.entitlements import longest_retention_days
 from app.db import DB_TIMEOUT_S
+from app.db.partitions import maintain_daily
 from app.ingest.keys import KeyStore
 from app.ingest.limits import Quota, RateLimiter
 from app.ingest.routes import router as ingest_router
@@ -35,12 +37,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.sink = PostgresSink(app.state.pool)
         app.state.rate = RateLimiter()
         flusher = asyncio.create_task(quota.flush_every())
+        # Partitions and retention, at startup and then once a day (ADR 0020). In the
+        # background, so the app starts even while the database is down.
+        upkeep = asyncio.create_task(maintain_daily(app.state.pool, longest_retention_days()))
         try:
             yield
         finally:
-            flusher.cancel()
-            with suppress(asyncio.CancelledError):
-                await flusher
+            for task in (flusher, upkeep):
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
             await quota.flush_logged()  # Fly stops idle machines; keep their counts
             await app.state.pool.close()
 

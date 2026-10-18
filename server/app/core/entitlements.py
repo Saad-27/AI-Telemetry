@@ -34,3 +34,9 @@ _PLANS = {"free": FREE}
 def entitlements(plan: str) -> Entitlements:
     """An unknown plan gets the free plan's limits."""
     return _PLANS.get(plan, FREE)
+
+
+def longest_retention_days() -> int:
+    """Day partitions hold every account's data, so a day is dropped only once the longest
+    retention has passed (ADR 0020). A plan that keeps less would need its rows deleted."""
+    return max(p.retention_days for p in _PLANS.values())

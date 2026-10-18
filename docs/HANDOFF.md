@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-18 (M3 steps 1-4 merged; blocked-accounts fix in review, then step 5)
+**Last updated:** 2026-10-18 (M3 steps 1-4 merged; blocked-accounts fix and step 5 retention in review)
 
 ## Where the project is
 
@@ -20,8 +20,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
   unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
 - **In progress: M3** (ingest and storage), plan below. Steps 1-4 are merged; the
-  blocked-accounts fix is in review; step 5 is next. Hosting is the last step; confirm costs
-  with Saad first.
+  blocked-accounts fix and step 5's retention are in review (stacked PRs); step 5's metrics
+  are next. Hosting is the last step; confirm costs with Saad first.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -41,6 +41,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0017 | Rate limit and quota, sized so free accounts fit the Neon bill: `entitlements(plan)` (free: 1M calls and 2M records a month, 20 records/s with bursts to 3,000, per account; placeholders). Neon compute fixed at 0.25 CU (~$19.35/month cap); storage per free account ~$0.005 typical, ~$0.10 if abused. Plan comes from the cached key lookup. Both checked from memory before the body is read. Usage counted in memory, added to `monthly_usage` every 10 s (one statement, returns totals from all machines). Rate limit is a per-machine token bucket. Keys of deleted projects refused |
 | 0018 | SDK error samples: the first 3 of each error class per minute per process (was up to 100 a minute); the rest only counted. A capped error doesn't use up its series' `first_of_series` sample. No wire change |
 | 0019 | Accounts over quota are answered from memory: an expired cached key is kept while its account is blocked, so SDKs' checks every minute never reach the database. The key lookup also returns this month's usage, so a new machine blocks at once. `Quota.unblock(user_id)` is for the upgrade flow, which must call it on every ingest machine |
+| 0020 | Partition upkeep and retention run inside the app: at startup, then once per UTC day (hourly date check), under an advisory lock, `lock_timeout` 1 s. Days before today − `longest_retention_days()` are dropped, so rows live 7-8 days. Needs the table owner: how, once the app stops being the owner, is a step 8 decision |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -94,9 +95,17 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    Fly's docs don't say whether one request a minute keeps a lone machine running. If it
    doesn't, restarts wake Neon again. Options: `min_machines_running = 1` (~$2/month) or
    `auto_stop_machines = "suspend"` (keeps memory). Measure once hosted; ask Saad.
-5. **Retention job** (drop old partitions by `entitlements().retention_days`, and decide how
-   `ensure_partitions` runs in production) and **Prometheus metrics** (including quota and
-   rate-limit rejections, brief §9.10).
+5. **Retention: IN REVIEW** (branch `m3-retention`, stacked on `m3-blocked-accounts`;
+   `server/app/db/partitions.py`, ADR 0020). `maintain(conn, today, keep_days)` makes
+   yesterday to +7 days and drops days before today − 7; `maintain_daily` runs in the lifespan
+   (startup, then at most once per UTC day). `python -m app.db.partitions` and `make migrate`
+   run the same thing. Tests: `test_retention.py` (schedule), `test_retention_db.py` (drops,
+   the lock, startup). **For step 8:** the job needs owner rights (checked: only the owner can
+   create a partition); pick a second owner URL just for the job or a no-argument `SECURITY
+   DEFINER` function, together with where migrations run. Expired days wait for the next start
+   if the app is stopped by Fly for lack of traffic.
+   **Prometheus metrics: next** (including quota and rate-limit rejections, brief §9.10, and
+   the last successful partition run, so an alert fires long before partitions run out).
 6. **Read-time sums** (repository layer) and the end-to-end test: example app → rows → sums
    (also catches the server's enum and host copies drifting from the SDK's).
 7. **Load test**, results in `docs/capacity.md`.
@@ -205,8 +214,8 @@ source, not memory, before relying on it (brief §17).
   which rejects it. Remove it from `DATABASE_URL` (runbook step 2).
 - `make test` needs Docker for the server's database tests. Cloud sessions have no Docker: run
   `uv run pytest` in `sdk/python`, and in `server` with `-m "not db"`.
-- The dev database has partitions for a week from the last `make migrate`; after that, ingest
-  returns 503 until it is run again (production schedule: step 5).
+- The server makes partitions at startup and daily (ADR 0020), so the dev database no longer
+  runs out a week after `make migrate`.
 - Starlette's `TestClient` uses `httpx2` (the dev dependency), not `httpx`.
 - Soft-deleting a project must revoke its keys in the same transaction (M4, ADR 0015).
 - The app still connects as the schema owner, which bypasses RLS. Separate login roles for
