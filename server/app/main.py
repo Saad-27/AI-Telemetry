@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from prometheus_client import start_http_server
 
 from app.core.config import Settings, load_settings
+from app.core.edge import EdgeOnly
 from app.db import DB_TIMEOUT_S
 from app.ingest.keys import KeyStore
 from app.ingest.limits import Quota, RateLimiter
@@ -59,6 +60,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.include_router(ingest_router)
+    if settings.edge_secrets:
+        # Outermost of our own code: requests that skipped Cloudflare cost nothing more.
+        app.add_middleware(EdgeOnly, secrets=settings.edge_secrets)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

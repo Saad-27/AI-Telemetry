@@ -2,6 +2,7 @@ locals {
   ingest_hosts = sort([for name, h in var.hosts : "${name}.${var.domain}" if h.role == "ingest"])
   # Cloudflare rule expressions take a space-separated set of quoted strings.
   ingest_host_set = join(" ", [for h in local.ingest_hosts : "\"${h}\""])
+  all_host_set    = join(" ", [for name in sort(keys(var.hosts)) : "\"${name}.${var.domain}\""])
 }
 
 # ---- DNS -------------------------------------------------------------------------------
@@ -68,6 +69,35 @@ resource "cloudflare_zone_setting" "security_header" {
       nosniff            = true
     }
   }
+}
+
+# ---- Origin secret (ADR 0027) -----------------------------------------------------------
+
+# Every request Cloudflare forwards carries a secret header. The app (EDGE_SECRET) refuses
+# requests without it, so `*.fly.dev` cannot be used to skip the firewall and rate limit below.
+# The value is a sensitive variable, so plans in public run summaries never show it.
+resource "cloudflare_ruleset" "edge_secret" {
+  zone_id = var.zone_id
+  name    = "Request header transforms"
+  kind    = "zone"
+  phase   = "http_request_late_transform"
+
+  rules = [
+    {
+      ref         = "edge_secret"
+      description = "Prove to the app that the request came through Cloudflare"
+      action      = "rewrite"
+      expression  = "http.host in {${local.all_host_set}}"
+      action_parameters = {
+        headers = {
+          "X-Gaslit-Edge" = {
+            operation = "set"
+            value     = var.edge_secret
+          }
+        }
+      }
+    },
+  ]
 }
 
 # ---- Firewall (brief §11.5) --------------------------------------------------------------

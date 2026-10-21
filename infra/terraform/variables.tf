@@ -33,3 +33,14 @@ variable "ingest_rate_limit_per_10s" {
   type        = number
   default     = 300
 }
+
+variable "edge_secret" {
+  description = "Value of the X-Gaslit-Edge header Cloudflare adds to every request; the same value is the app's EDGE_SECRET Fly secret (ADR 0027). Set via TF_VAR_edge_secret."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.edge_secret) >= 32 && can(regex("^[0-9A-Za-z]+$", var.edge_secret))
+    error_message = "edge_secret must be at least 32 letters or digits (openssl rand -hex 32)."
+  }
+}

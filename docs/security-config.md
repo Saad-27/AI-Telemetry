@@ -36,8 +36,8 @@ How to apply a setting is in [deploy.md](deploy.md).
 
 | Requirement | Why | Status |
 |---|---|---|
-| **Requests that skip Cloudflare are rejected** | `gaslit-api-production.fly.dev` reaches the app directly, around Cloudflare's firewall, ingest path filter and rate limit. Proposed fix: a Cloudflare request-header rule adds a secret header, the app rejects requests without it, and the deploy smoke test goes through `PUBLIC_URL` | **Gap**: decide at step 8 |
-| The app reads the client IP only from a header it can trust (`CF-Connecting-IP`, once the gap above is closed) | Otherwise per-IP limits on invalid keys can be dodged by forging the header | Step 8, with the gap above; the per-IP limit on invalid keys waits for it (ADR 0017) |
+| **Requests that skip Cloudflare are rejected** | `gaslit-api-production.fly.dev` reaches the app directly, around Cloudflare's firewall, ingest path filter and rate limit. A Cloudflare transform rule adds the secret `X-Gaslit-Edge` header; the app answers 403 without it (only `/healthz` stays open, for Fly's checks), and strips it before routing so it never reaches logs (ADR 0027) | **Done** in code and Terraform, tested. Takes effect when `EDGE_SECRET` is set on Fly (runbook step 6.4); until then the bypass stays open. Make the secret required on Fly once set |
+| The app reads the client IP only from a header it can trust (`CF-Connecting-IP`, trustworthy only on requests with the edge header) | Otherwise per-IP limits on invalid keys can be dodged by forging the header | Step 8, next PR: the per-IP limit on invalid keys (ADR 0017) |
 | Secrets only through `fly secrets set`, never in `production.toml` | The repo is public | **Done** (the file has none) |
 | Non-root container, no dev dependencies in the image | Limits damage from a compromised process | **Done** (`uid 10001`, `uv sync --no-dev`) |
 | Logs may hold client IPs (personal data, GDPR); keep retention short and list Fly, Neon and Cloudflare as sub-processors | Privacy policy accuracy | M7 |
@@ -48,7 +48,7 @@ How to apply a setting is in [deploy.md](deploy.md).
 |---|---|---|
 | SSL mode **Full (strict)**, TLS 1.2 minimum, Always HTTPS, HSTS | No plaintext hop between users and Fly | **Done** in Terraform, applied at runbook step 5 |
 | Ingest hosts accept only `/v1/ingest`, `/healthz`, `/readyz` and ACME | Scanners never reach the app | **Done** in Terraform |
-| Per-IP rate limit on ingest | Flood protection before the app. The load test showed one machine needs it: 2,000 bad-key requests/s from one client pegged the app's core and timed out real traffic | **Done** in Terraform (300 per 10 s per IP). Only works once requests to `*.fly.dev` are refused (section 3). At step 8, rerun the bad-key flood through Cloudflare to check it is blocked |
+| Per-IP rate limit on ingest | Flood protection before the app. The load test showed one machine needs it: 2,000 bad-key requests/s from one client pegged the app's core and timed out real traffic | **Done** in Terraform (300 per 10 s per IP). Only works once requests to `*.fly.dev` are refused (section 3, runbook step 6.4). At step 8, rerun the bad-key flood through Cloudflare to check it is blocked |
 | Registrar lock on, DNSSEC active | Stops domain hijacking, which would redirect users' SDK traffic and keys to an attacker | Confirm both: DNSSEC was "pending" on 2026-10-14 |
 
 ## 5. Ingest app behaviour (M3 steps 2-5)

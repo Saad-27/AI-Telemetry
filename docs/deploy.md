@@ -121,7 +121,7 @@ fly tokens create deploy -a gaslit-worker-production -x 8760h   # GitHub secret 
 
 # 5. First ingest deploy.
 fly deploy server --config "$PWD/deploy/fly/production.toml" --ha=false
-curl https://gaslit-api-production.fly.dev/readyz   # {"status":"ok"}
+curl https://gaslit-api-production.fly.dev/readyz   # {"status":"ok"}; 403 once step 6.4 is done
 ```
 
 From then on, the deploy workflow does steps 2 and 5 on every merge, worker first. The tokens
@@ -143,8 +143,13 @@ from sleep. The deploy smoke test retries for about 30 s to cover this.
 
    Zone resources: Include > Specific zone > `gaslit.dev`. If an apply fails with a permission
    error on a ruleset, add the permission it names.
-4. If the zone already has custom firewall or rate-limiting rules made in the dashboard,
-   delete them. Terraform owns those phases and the first apply would fail.
+4. If the zone already has custom firewall, rate-limiting or request header transform rules
+   made in the dashboard, delete them. Terraform owns those phases and the first apply would
+   fail.
+5. **Edge secret** ([ADR 0027](decisions/0027-edge-secret-header.md)): Cloudflare adds it to
+   every request as the `X-Gaslit-Edge` header, and the app refuses requests without it, so
+   nobody can skip Cloudflare by calling `*.fly.dev`. Make one with `openssl rand -hex 32`. It
+   goes into GitHub (step 4), your shell for step 5, and Fly at step 6. Store it nowhere else.
 
 ### 4. GitHub repository settings
 
@@ -159,7 +164,7 @@ Required reviewers on environments are free only on public repositories. If the 
 private, they need GitHub Enterprise, and both approval gates would stop working.
 
 **Repository secrets** (Settings > Secrets and variables > Actions > Secrets):
-`CLOUDFLARE_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (from step 3).
+`CLOUDFLARE_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `EDGE_SECRET` (from step 3).
 
 **Repository variables** (same page > Variables):
 
@@ -183,6 +188,7 @@ export AWS_ACCESS_KEY_ID=...             # step 3.2 (R2 credentials)
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_ENDPOINT_URL_S3=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 export TF_VAR_zone_id=...                # step 1.3
+read -rsp "Edge secret: " TF_VAR_edge_secret && export TF_VAR_edge_secret   # step 3.5
 terraform init
 terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=windows_amd64
 terraform plan
@@ -203,7 +209,16 @@ fly certs setup ingest.gaslit.dev -a gaslit-api-production
 
 1. Put each `_fly-ownership` value into `infra/terraform/terraform.tfvars`, then open a PR, merge it and approve the apply.
 2. Run `fly certs check app.gaslit.dev -a gaslit-api-production` until the certificate is issued.
-3. Change the `production` environment's `PUBLIC_URL` to `https://app.gaslit.dev`.
+3. Change the `production` environment's `PUBLIC_URL` to `https://app.gaslit.dev`, and check
+   `curl https://app.gaslit.dev/readyz` returns `{"status":"ok"}`.
+4. Close the `*.fly.dev` bypass. The app restarts and from then on answers 403 to anything
+   without Cloudflare's header, except `/healthz` (Fly's own checks):
+
+   ```bash
+   read -rsp "Edge secret: " EDGE_SECRET && fly secrets set EDGE_SECRET="$EDGE_SECRET" -a gaslit-api-production; unset EDGE_SECRET
+   curl https://app.gaslit.dev/readyz                     # {"status":"ok"}
+   curl https://gaslit-api-production.fly.dev/readyz      # {"error":"forbidden"}
+   ```
 
 ### 7. OAuth apps (needed in M4; can be done now)
 The callback path is `/auth/{provider}/callback` (brief §9.3). The secret names are fixed in M4.
@@ -234,9 +249,10 @@ the TypeScript SDK starts.
 |---|---|---|
 | Fly secret, worker app | `DATABASE_URL` | Neon's owner connection string (direct), `sslmode=verify-full`, without `channel_binding` (step 2) |
 | Fly secret, ingest app | `DATABASE_URL` | The same with the `gaslit_ingest` login, made by `app.db.login_role` (step 2) |
+| Fly secret, ingest app | `EDGE_SECRET` | The header value Cloudflare adds; requests without it get 403 (step 6) |
 | Fly secret, ingest app | OAuth client IDs and secrets, session key | M4 |
 | GitHub `production` env | `FLY_API_TOKEN`, `FLY_WORKER_API_TOKEN`, var `PUBLIC_URL` | Deploy tokens (one per app), smoke-test URL |
-| GitHub repo secrets | `CLOUDFLARE_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Terraform |
+| GitHub repo secrets | `CLOUDFLARE_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `EDGE_SECRET` | Terraform |
 | GitHub repo vars | `CLOUDFLARE_ZONE_ID`, `R2_ENDPOINT`, `PRODUCTION_ENABLED`, `INFRA_ENABLED` | Terraform and on/off switches |
 | Cloudflare | R2 bucket `gaslit-tfstate`, DNSSEC, registrar lock | Terraform state, domain safety |
 | Local `.env` | dev OAuth credentials | Never committed |
@@ -254,5 +270,13 @@ the TypeScript SDK starts.
   by its password and TLS. Check Neon's IP allow-list options before M7 (ADR 0007).
 - **Rotate a deploy token:** create a new one (step 2), update the GitHub secret, then revoke
   the old one with `fly tokens list -a <app>` and `fly tokens revoke <id>`.
+- **Rotate the edge secret** (if it ever appears anywhere), without refusing real traffic:
+  1. Make a new one (`openssl rand -hex 32`). Set the app to accept both, typed at hidden
+     prompts: `read -rsp "New: " NEW && read -rsp "Old: " OLD && fly secrets set
+     EDGE_SECRET="$NEW $OLD" -a gaslit-api-production`.
+  2. Put the new one in the GitHub secret `EDGE_SECRET`, then Actions > Infra > Run workflow
+     and approve the apply. Cloudflare now sends the new value.
+  3. `fly secrets set EDGE_SECRET="$NEW" -a gaslit-api-production` to drop the old one, then
+     `unset NEW OLD`.
 - **Rotate the ingest login's password:** rerun step 2.3. The ingest app restarts with the new
   secret. The owner's password: reset it in Neon, then repeat step 2.1 with the new URL.

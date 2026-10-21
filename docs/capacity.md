@@ -220,7 +220,11 @@ tools/loadtest/run.sh down
 ```
 
 **At step 8 (Fly and Neon):** point `--url` at the deployed app with keys made on Neon. Leave out
-`--containers`, and read CPU, throttling and memory in Fly's Grafana. Then record:
+`--containers`, and read CPU, throttling and memory in Fly's Grafana. Through Cloudflare, one
+IP is blocked past 300 requests per 10 s, so steady runs above 30 req/s must go to `*.fly.dev`
+with the `X-Gaslit-Edge` header (ADR 0027); the flood runs go through Cloudflare, to check it
+blocks them. The generator speaks plain HTTP only, so it needs TLS and that header first. Then
+record:
 - requests/s at p95 under 200 ms;
 - how long the burst balance lasts;
 - whether a stopped machine starts with a full balance;

@@ -9,6 +9,7 @@ on:
   push:
     branches: [main]
     paths: [infra/terraform/**, .github/workflows/infra.yml]
+  workflow_dispatch: # re-apply main, for example after rotating EDGE_SECRET (docs/deploy.md)
 
 permissions:
   contents: read
@@ -56,6 +57,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_ENDPOINT_URL_S3: ${{ vars.R2_ENDPOINT }}
       TF_VAR_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      TF_VAR_edge_secret: ${{ secrets.EDGE_SECRET }} # sensitive: plans show it as hidden
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -73,7 +75,9 @@ jobs:
 
   apply:
     needs: check
-    if: vars.INFRA_ENABLED == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      vars.INFRA_ENABLED == 'true' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     environment: infra # required reviewer: you approve before it runs
     env:
@@ -82,6 +86,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_ENDPOINT_URL_S3: ${{ vars.R2_ENDPOINT }}
       TF_VAR_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      TF_VAR_edge_secret: ${{ secrets.EDGE_SECRET }} # sensitive: plans show it as hidden
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
