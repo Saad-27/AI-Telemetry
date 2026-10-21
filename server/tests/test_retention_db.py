@@ -1,14 +1,14 @@
 """Partition upkeep and retention against Postgres (ADR 0020). Creation is in test_schema.py;
-the daily schedule in test_retention.py."""
+the hourly schedule in test_retention.py."""
 
 import asyncio
 import time
 from collections.abc import AsyncIterator
+from contextlib import suppress
 from datetime import UTC, date, datetime, timedelta
 
 import asyncpg
 import pytest
-from fastapi.testclient import TestClient
 
 from app.core.config import Settings
 from app.db.partitions import (
@@ -20,7 +20,7 @@ from app.db.partitions import (
     partition_name,
     retention,
 )
-from app.main import create_app
+from app.worker import run
 
 pytestmark = pytest.mark.db
 
@@ -111,22 +111,20 @@ async def test_one_machine_at_a_time(conn: asyncpg.Connection, database_url: str
     await drop_expired(conn, TIDY)
 
 
-def test_the_app_makes_partitions_when_it_starts(database_url: str) -> None:
-    today = datetime.now(UTC).date()
-    last = today + timedelta(days=DAYS_AHEAD)  # holds no rows yet
-
-    async def run(query: str) -> set[str]:
-        conn = await asyncpg.connect(database_url)
-        try:
-            await conn.execute(query)
-            return await existing(conn)
-        finally:
-            await conn.close()
-
+@pytest.mark.anyio
+async def test_the_worker_makes_partitions_when_it_starts(
+    database_url: str, conn: asyncpg.Connection
+) -> None:
+    last = datetime.now(UTC).date() + timedelta(days=DAYS_AHEAD)  # holds no rows yet
     for table in PARTITIONED:
-        asyncio.run(run(f"DROP TABLE IF EXISTS {partition_name(table, last)}"))
-    with TestClient(create_app(Settings(database_url=database_url))):
+        await conn.execute(f"DROP TABLE IF EXISTS {partition_name(table, last)}")
+    worker = asyncio.create_task(run(Settings(database_url=database_url)))
+    try:
         deadline = time.monotonic() + 5
-        while not names(last) <= asyncio.run(run("SELECT 1")):
+        while not names(last) <= await existing(conn):
             assert time.monotonic() < deadline, "partitions not made at startup"
-            time.sleep(0.05)
+            await asyncio.sleep(0.05)
+    finally:
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker

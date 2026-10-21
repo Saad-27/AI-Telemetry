@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-18 (M3 step 7 done: load test #39, then load shedding and junk charges #40; step 8 next)
+**Last updated:** 2026-10-21 (M3 step 8: worker app and ingest login built (ADR 0026); Saad has Neon and Fly accounts and is doing runbook step 2)
 
 ## Where the project is
 
@@ -47,6 +47,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0023 | 5-minute and hourly totals (`totals_5m`, `totals_1h`), built 3 min after each 5-minute bucket ends by whichever machine is receiving summaries (checks every minute; never wakes an idle database) and by the daily upkeep. `totals_watermark`: totals before it, summaries after, so reads are always correct. Late summaries (≥ 2 min after their bucket) are marked by ingest in `totals_stale` and rebuilt next build. Reads split a range into ≤ 5 pieces (summaries, 5-min, hourly, 5-min, summaries). Per-minute summaries and 5-min totals kept 2 days, hourly and samples 7. Busy account: 5 / 7 / 10 ms for 1 h / 24 h / 7 d (was 6 / 93 / 651). Saad approved 2026-10-18 |
 | 0024 | Load test with our own open-loop generator (`tools/loadtest/`, reuses `tests/records.py`; not k6/Locust), locally on Docker limits copying production: app image in 256 MB on 1 core ("burst") or 5 ms/80 ms ("baseline", Fly's `shared-cpu-1x` quota once its burst balance is spent); Postgres at 0.25 CPU (Neon 0.25 CU). Rerun on Fly and Neon at step 8 |
 | 0025 | Load shedding: past 50 ingest requests in progress, `429 overloaded` with a random 3-10 s `Retry-After` (not 503: the SDK drops a batch after three 5xx). `MAX_DECOMPRESSED` 2 MB; a rejected body costs the account one rate-limit token per KB (corrupt gzip: the cap). No per-request limit per account (Saad) |
+| 0026 | **Worker app** `gaslit-worker-production` (no public port, always running, ~$2/month) alone holds Neon's owner URL: migrations as its `release_command`, `maintain` (partitions, totals, retention) at start and hourly. Ingest logs in as `gaslit_ingest` (member of `ingest_writer`), made by `python -m app.db.login_role ingest` over `fly ssh console`, piped into `fly secrets import`. Ingest no longer builds totals. Deploy: worker first, own token each |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -172,7 +173,18 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    **Still open:** the dashboard target on 0.25 CU (proposal 5, for M4), grouping inserts
    (later), quieting `ClientDisconnect` tracebacks (one-line fix).
 8. **Hosting** (runbook steps 2-6), with login roles created by SQL and granted
-   `ingest_writer`/`dashboard_app`. Confirm costs with Saad first. Then rerun the load test
+   `ingest_writer`/`dashboard_app`. **Costs approved by Saad 2026-10-21.** Saad's answers so
+   far: scale to zero stays as is until he says otherwise (explained that a sending account keeps
+   the machine running anyway, so it only matters when nobody sends), and close the
+   `*.fly.dev` bypass with the secret Cloudflare header. **Worker app and ingest login: done,
+   in a PR** (ADR 0026; Saad chose "ingest only writes, cleanup is its own job"). `app/worker.py`, `maintain_every` in
+   `app/db/partitions.py` (replaces `maintain_daily`), `app/db/login_role.py`,
+   `deploy/fly/worker.toml`, worker step in `deploy.yml` (secret `FLY_WORKER_API_TOKEN`),
+   compose `worker` service. `Totals` (in-app builder) and its two metrics removed. The
+   end-to-end test now runs the app as `gaslit_ingest`; checked with passwords required.
+   Runbook step 2 rewritten for the two apps. **Unverified until Saad runs it:** the
+   `fly ssh console ... | fly secrets import` pipe (flyctl output on stdout would break it;
+   `fly secrets list` shows whether it worked). Then rerun the load test
    against Fly and Neon (`docs/capacity.md`, "How to rerun") and put the number in the README.
    Floods (from step 7): close the `*.fly.dev` bypass so Cloudflare's per-IP limit (300 per
    10 s, in Terraform) applies, rerun the bad-key flood through Cloudflare, add the app's
@@ -295,12 +307,12 @@ source, not memory, before relying on it (brief §17).
 - Docker works in WSL again (2026-10-18, step 7). The load-test stack runs beside compose
   (Postgres :5433, app :8001, metrics :9092, network `gaslit-load`); `tools/loadtest/run.sh down`
   removes it. It never touches the dev database.
-- The server makes partitions at startup and daily (ADR 0020), so the dev database no longer
-  runs out a week after `make migrate`.
+- Partitions, totals and retention run in the worker (compose service `worker` under
+  `make dev`), hourly, so the dev database no longer runs out a week after `make migrate`.
 - Starlette's `TestClient` uses `httpx2` (the dev dependency), not `httpx`.
 - Soft-deleting a project must revoke its keys in the same transaction (M4, ADR 0015).
-- The app still connects as the schema owner, which bypasses RLS. Separate login roles for
-  ingest and the dashboard come with hosting (M3 step 8) and M4 (ADR 0013).
+- Hosted ingest logs in as `gaslit_ingest` (ADR 0026); locally (compose, tests' app) it is
+  still the owner. The dashboard's login (`login_role dashboard`) comes with M4.
 
 ## Open discussions (not decided; raise with Saad when relevant)
 

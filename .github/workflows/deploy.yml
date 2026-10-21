@@ -42,6 +42,17 @@ jobs:
           ref: ${{ env.SHA }}
           persist-credentials: false
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # v1.6
+      - name: Deploy the worker, which runs the migrations first
+        # The worker alone holds the schema owner's connection string (ADR 0026), so it goes
+        # first: a failed migration stops the run before the ingest app changes. Each app has
+        # its own deploy token. The builder caches layers, so the second build is quick.
+        run: >-
+          flyctl deploy server
+          --config "$GITHUB_WORKSPACE/deploy/fly/worker.toml"
+          --remote-only --ha=false
+          --image-label "git-${SHA::12}"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_WORKER_API_TOKEN }}
       - name: Deploy
         # --ha=false: one machine until real traffic needs more (ADR 0007).
         run: >-

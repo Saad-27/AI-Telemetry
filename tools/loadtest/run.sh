@@ -47,6 +47,7 @@ case "${1:-}" in
     docker exec "$PG" psql -qU app -d app -c "CREATE EXTENSION pg_stat_statements" >/dev/null
     docker build -q -t "$IMAGE" "$ROOT/server" >/dev/null
     (cd "$ROOT/server" && DATABASE_URL=$OWNER_URL uv run alembic upgrade head >/dev/null &&
+      DATABASE_URL=$OWNER_URL uv run python -m app.db.partitions >/dev/null 2>&1 &&
       DATABASE_URL=$OWNER_URL PYTHONPATH=.:tests uv run python ../tools/loadtest/loadtest.py \
         setup --keys "$KEYS")
     start_app "${2:-burst}"

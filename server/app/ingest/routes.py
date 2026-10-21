@@ -140,7 +140,6 @@ async def _ingest(request: Request, encoding: str, started: float) -> JSONRespon
             _RECORDS[kind, "rejected"].inc(len(got) - len(valid))
     accepted = len(records.summaries) + len(records.samples)
     state.quota.add(found.user_id, sum(s.count for s in records.summaries), accepted)
-    state.totals.note(records.summaries)  # this machine builds their totals (ADR 0023)
     log.info(
         "ingest 202 project=%s accepted=%d rejected=%d ms=%.1f",
         found.project_id,
