@@ -30,6 +30,16 @@ def load_settings() -> Settings:
     return Settings(database_url=url, metrics_port=int(port) if port else None, edge_secrets=edge)
 
 
+def require_edge_secret(settings: Settings) -> None:
+    """Refuse to serve on Fly without EDGE_SECRET (ADR 0027).
+
+    Without it, `*.fly.dev` reaches the app around Cloudflare's firewall and rate limit. Only
+    the public app calls this: the worker has no public port.
+    """
+    if os.environ.get("FLY_APP_NAME") and not settings.edge_secrets:
+        raise RuntimeError("EDGE_SECRET must be set when deployed")
+
+
 def _require_verified_tls(url: str) -> None:
     """Refuse to start unless the database certificate is checked (docs/security-config.md).
 

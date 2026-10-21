@@ -4,7 +4,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from app.core.config import Settings, load_settings
+from app.core.config import Settings, load_settings, require_edge_secret
 from app.main import create_app
 
 SECRET = "a" * 64
@@ -74,3 +74,12 @@ def test_settings_refuse_short_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(RuntimeError) as exc:
         load_settings()
     assert "short-sentinel" not in str(exc.value)
+
+
+def test_deployed_app_requires_the_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FLY_APP_NAME", "gaslit-api-production")
+    with pytest.raises(RuntimeError):
+        create_app(Settings(database_url=DEAD_DB))
+    require_edge_secret(Settings(database_url=DEAD_DB, edge_secrets=(SECRET,)))
+    monkeypatch.delenv("FLY_APP_NAME")
+    require_edge_secret(Settings(database_url=DEAD_DB))  # locally and in tests: optional

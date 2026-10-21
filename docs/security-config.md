@@ -36,7 +36,7 @@ How to apply a setting is in [deploy.md](deploy.md).
 
 | Requirement | Why | Status |
 |---|---|---|
-| **Requests that skip Cloudflare are rejected** | `gaslit-api-production.fly.dev` reaches the app directly, around Cloudflare's firewall, ingest path filter and rate limit. A Cloudflare transform rule adds the secret `X-Gaslit-Edge` header; the app answers 403 without it (only `/healthz` stays open, for Fly's checks), and strips it before routing so it never reaches logs (ADR 0027) | **Done** in code and Terraform, tested. Takes effect when `EDGE_SECRET` is set on Fly (runbook step 6.4); until then the bypass stays open. Make the secret required on Fly once set |
+| **Requests that skip Cloudflare are rejected** | `gaslit-api-production.fly.dev` reaches the app directly, around Cloudflare's firewall, ingest path filter and rate limit. A Cloudflare transform rule adds the secret `X-Gaslit-Edge` header; the app answers 403 without it (only `/healthz` stays open, for Fly's checks), and strips it before routing so it never reaches logs (ADR 0027) | **Done** 2026-10-21: `EDGE_SECRET` set on Fly, checked (`app.gaslit.dev` ok, `*.fly.dev` 403). The app refuses to start on Fly without it |
 | The app reads the client IP only from a header it can trust (`CF-Connecting-IP`, trustworthy only on requests with the edge header) | Otherwise per-IP limits on invalid keys can be dodged by forging the header | Step 8, next PR: the per-IP limit on invalid keys (ADR 0017) |
 | Secrets only through `fly secrets set`, never in `production.toml` | The repo is public | **Done** (the file has none) |
 | Non-root container, no dev dependencies in the image | Limits damage from a compromised process | **Done** (`uid 10001`, `uv sync --no-dev`) |
