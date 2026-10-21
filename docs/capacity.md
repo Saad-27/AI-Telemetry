@@ -8,7 +8,34 @@ The results are from before the fixes in
 [ADR 0025](decisions/0025-load-shedding-and-rejected-body-charges.md) (load shedding, charges for
 rejected bodies), except under "After the changes" at the end.
 
-## Headline (local run, 2026-10-18; not yet on Fly and Neon)
+## Headline on Fly and Neon (2026-10-21)
+
+One `shared-cpu-1x` machine (256 MB, `fra`) and Neon at a fixed 0.25 CU (Frankfurt), the
+smallest production setup. Run by Saad from his PC in the UK, straight to `*.fly.dev` with the
+edge header. Every one of the 54,000 requests was stored.
+
+| Rate | Records/s | p50 / p95 / p99 (ms) | App CPU |
+|---|---|---|---|
+| 10-40 req/s | 22-90 | 39-42 / 44-47 / 48-60 | 3-11% |
+| 50-150 req/s | 112-338 | 39-40 / 45-46 / 51-53 | 13-31% |
+| 200 req/s | 451 | 39 / 45 / 51 | ~40% |
+| 300 req/s | 675 | 39 / 45 / 52 | ~60% |
+
+- **Sustained, indefinitely: about 25-30 req/s (55-65 records/s), calculated.** A request
+  costs about 2.0 ms of app CPU at high rates and 2.7 ms at low ones (fixed background work
+  shared by fewer requests). The machine's baseline is 6.25% of a core; it crossed it at
+  ~22 req/s. Throttling was never seen, so this is the calculated floor, not a measured one.
+- **On burst balance: at least 300 req/s at p95 45 ms; the limit was not reached.** About 40
+  ms of every request is the trip from the UK to Frankfurt. The next limit is the app's core
+  (~450-500 req/s), with load shedding (ADR 0025) at 50 requests in progress.
+- **The local stand-in for Neon was 5-8× too pessimistic.** Locally the 0.25-CPU database was
+  the limit at 150 req/s; Neon at 0.25 CU did 300 without slowing.
+- At ~0.2 req/s per SDK process (brief §20.4) that is ~125-150 processes indefinitely and
+  1,500+ in bursts.
+
+Details under "On Fly and Neon" below.
+
+## Headline (local run, 2026-10-18)
 
 | Setup | Sustained, p95 under 200 ms | What limits it |
 |---|---|---|
@@ -242,26 +269,63 @@ F="--url https://gaslit-api-production.fly.dev"
 
 # Accounts without the week of history: it would make the worker rebuild everyone's totals.
 $L setup --no-history $K
-$L run $K $F --rate 10,20,30,40 --step-s 60       # 1. steady, while the burst balance lasts
-$L run $K $F --rate 15 --step-s 600               # 2. how long the balance lasts at baseline+
+$L run $K $F --rate 10,20,30,40 --step-s 60       # 1. steady
+$L run $K $F --rate 50,100,150 --step-s 60        # 2. higher
+$L run $K $F --rate 200,300 --step-s 60           # 3. higher still
 $L run $K --url https://ingest.gaslit.dev --kind unknown-key --rate 50 --step-s 30
-                                                  # 3. through Cloudflare: blocked past 30/s
-$L run $K $F --rate 20 --step-s 90 --dashboard    # 4. dashboard reads on Neon (see below)
+                                                  # 4. through Cloudflare: blocked past 30/s
 $L cleanup                                        # removes the load accounts and their rows
 unset DATABASE_URL EDGE_SECRET
 ```
 
-For the stopped-machine question, let the app scale to zero (no traffic for a few minutes,
-`fly status -a gaslit-api-production` shows it stopped), then repeat run 2 and compare when
-throttling starts in Grafana with the first run. If run 4 fails on `SET ROLE dashboard_app`,
-Neon's owner is not a member of that role (Postgres 16+ does not make it one by default):
-`GRANT dashboard_app TO neondb_owner` once, as the owner, fixes it.
+Run from `server/` in one shell: `L`, `K` and `F` are shell variables. A run that sits below
+the 6.25% baseline (about 22 req/s) spends no burst balance, so it cannot show how long the
+balance lasts; draining a full balance takes tens of minutes even at 150 req/s, which Neon's
+free storage does not allow. Dashboard reads (`--dashboard`) are left out on production: the
+accounts have no history (`--no-history`) and every round trip from a PC to Frankfurt adds
+~40 ms, so they wait for M4's dashboard, which runs next to Neon.
 
-Record:
-- requests/s at p95 under 200 ms;
-- how long the burst balance lasts;
-- whether a stopped machine starts with a full balance;
-- that Cloudflare blocks one IP past 30 req/s;
-- dashboard read times on real Neon.
+## On Fly and Neon (2026-10-21)
 
-Put the number in the README (brief §9.10).
+Setup and headline at the top. Runs 1-4 above, on `gaslit-api-production` after #50.
+
+**Steady load.** All 202. Latency was flat from 10 to 300 req/s: p50 38-42 ms, p95 42-48 ms
+per 5 s window, max 231 ms. Records per request ~2.25, as locally. WAL ~1.2 KB per request.
+
+**Cold start.** Run 2 woke a machine Fly had stopped (scale to zero): its first 5 s had p50
+794 ms and max 4.6 s, then normal. Fly's proxy held the requests, so all were stored, but 4.6 s
+is close to the SDK's 5 s timeout. A slower start would time out the SDK's first batch, which
+it retries (ids make that safe). The machine was stopping and starting about every 7 minutes
+while idle before the runs.
+
+**Burst balance.** A machine started at 19:57:45 then spent roughly 80 s of CPU above its
+baseline (runs 2 and 3) with no sign of throttling. So a restarted machine does not start with
+only a few seconds of balance, or the quota is enforced more loosely than assumed. How long a
+full balance lasts was not measured (see the note above the commands).
+
+**Neon (Query performance, `gaslit_ingest`, all runs):**
+
+| Statement | Calls | Mean | Local mean (0.25 CPU) |
+|---|---|---|---|
+| `INSERT INTO call_samples` | 54,000 | 0.1 ms | 0.50 ms |
+| `INSERT INTO summary_records` | 4,492 | 0.1 ms | 0.87 ms |
+| Key lookup (`UPDATE ingest_keys`) | 7,264 | 0.1 ms | 0.20 ms |
+| `monthly_usage` flush | 56 | 3.1 ms | 97-162 ms |
+| asyncpg's reset (`RESET ALL`, `pg_advisory_unlock_all()`) | 61,320 each | ~0.01 ms | ~0.02 ms |
+
+Compute stayed at the fixed 0.25 CU (no autoscaling). About 6.5 s of statement time in total
+over ~9 minutes of load.
+
+**Unknown-key flood through Cloudflare (run 4, 50 req/s from one IP).** Cloudflare's rule
+(300 requests per 10 s, then a 10 s block) works as set: about 6 s of each 16 s cycle reached
+the app, the rest was blocked. Blocked requests were answered in ~21 ms, faster than any round
+trip to Fly (~39 ms), so by Cloudflare's nearest edge. Of those that reached the app, the
+per-IP limit (ADR 0028) answered most with `429 too_many_invalid_keys` and let 16 through to a
+`401`; no WAL was written. Overall: 1,161 × 429, 16 × 401, and 323 the generator could not
+read. Those were not failures: Cloudflare re-sends the app's answers chunked, which the
+generator did not read, so the next answer on the connection was misread. Fixed after the run
+(`Client._exchange` reads chunked answers).
+
+The number for the README (brief §9.10): **about 25-30 req/s (55-65 records/s) indefinitely
+on one `shared-cpu-1x` machine and Neon 0.25 CU, and at least 300 req/s (675 records/s) at
+p95 45 ms while the machine's burst balance lasts.**

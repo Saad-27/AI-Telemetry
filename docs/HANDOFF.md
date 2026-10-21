@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-21 (M3: #49 and #50 merged and deployed; Saad's Fly load test is next; alerts paused)
+**Last updated:** 2026-10-21 (M3: Fly load test done, results in capacity.md and README; generator reads chunked answers; M4 next)
 
 ## Where the project is
 
@@ -22,8 +22,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
   `gaslit-api-production`; worker `gaslit-worker-production`; Neon Frankfurt. Deploys from
   `main` after Saad approves. `*.fly.dev` answers 503 (edge secret, ADR 0027). Production only,
   no staging (ADR 0006). Saad chose `shared-cpu-1x` until there are many users.
-- **In progress: M3** (ingest and storage). Steps 1-7 merged (#32-#40); step 8 hosting is live
-  (#41-#48). **To finish M3** (Saad, 2026-10-21, in this order):
+- **M3 (ingest and storage): done once the load-test PR merges** (Saad to confirm). Steps 1-7
+  merged (#32-#40); step 8 hosting is live (#41-#50). **The finishing list** (Saad, 2026-10-21):
   0. **Done (#50, deployed by Deploy run 45):** SDK warnings say whose side a failure is on (5xx:
      Gaslit's; network error: either; 400: a Gaslit bug; 401: check the key), and the edge
      check answers 503, not 403, so a secret mismatch no longer silences SDKs until restart
@@ -34,10 +34,16 @@ session, in the same PR as the session's other changes, so it reaches `main`.
      the check; others wait (`429 too_many_invalid_keys`) while their IP's bucket (20, one per
      2 s, IPv6 per /64) is empty. Locally: 200 unknown keys/s → DB lookups ~0.5/s after a first
      burst of ~70, DB CPU 0.17 → 0.02. **Numbers for Saad to confirm.**
-  2. **Generator ready, Saad runs it:** HTTPS, `X-Gaslit-Edge` from `EDGE_SECRET` in the
-     environment, `setup --no-history` (history would rewind everyone's totals), `cleanup`
-     (deletes `load%@localhost` accounts and their rows; checked locally). Commands in
-     `docs/capacity.md`, "At step 8". Then put the number in the README.
+  2. **Done: Fly load test** (Saad ran it 2026-10-21; `docs/capacity.md` "On Fly and Neon",
+     README). 10-300 req/s all stored, p95 ~45 ms (~40 ms of it UK → Frankfurt), limit not
+     reached; ~2.0-2.7 ms app CPU per request, so ~25-30 req/s indefinitely on baseline CPU
+     (calculated; throttling never seen). Neon at fixed 0.25 CU was 5-8× faster per statement
+     than the local stand-in. Cold start from a stopped machine: max 4.6 s, close to the SDK's
+     5 s timeout. Cloudflare's per-IP block works (blocked answers in ~21 ms from the edge).
+     The generator now reads chunked answers (Cloudflare sends them; 323 misread in the flood
+     run). Dashboard reads on Neon were skipped: no history and PC → Frankfurt round trips;
+     measure from M4's dashboard. **Saad: confirm `$L cleanup` ran** (deletes the
+     `load%@localhost` accounts).
   3. Leftovers: `ClientDisconnect` **done** (`499 disconnected`, one log line). The
      stopped-machine burst balance is part of Saad's run (capacity.md). **Alerts: paused (Saad,
      2026-10-21: new product, revisit later).** Not an M3 blocker. When revisited, the
@@ -243,7 +249,9 @@ to change** (switching range, filters or pages should feel instant). Both count 
 - **It starts in M3.** Step 6's reads decide how fast a range or filter change is. Totals
   (ADR 0023) make every range ~5-30 ms on a whole core, but 70-200 ms for 24 h/7 d charts on a
   0.25 CPU database (step 7, `docs/capacity.md` proposal 5). Target proposed in ADR 0022 (p95
-  under 100 ms per query, awaiting Saad); measure again on Neon at step 8.
+  under 100 ms per query, awaiting Saad); not measured on Neon at step 8 (see capacity.md), so
+  measure from M4's deployed dashboard. Neon ran ingest statements 5-8× faster than the local
+  stand-in, so the local 70-200 ms is likely pessimistic.
 - Keep the frontend simple to change: few small components, no UI framework sprawl.
 - **Show recovery quickly (Saad).** When a provider comes back, the dashboard must say so within
   minutes, not after the 15-minute badge window: a "recovering" badge once the last 2 complete
