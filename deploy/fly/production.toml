@@ -8,9 +8,8 @@
 app = "gaslit-api-production"
 primary_region = "fra" # D12: EU-hosted
 
-[build]
-  # Relative to the directory passed to `fly deploy` (server/), which is also the build context.
-  dockerfile = "Dockerfile"
+# No [build] section: flyctl builds server/Dockerfile, from the directory passed to
+# `fly deploy`. A `dockerfile` set here would be read relative to this file's folder.
 
 [env]
   METRICS_PORT = "9091"
