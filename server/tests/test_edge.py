@@ -34,14 +34,16 @@ def test_refuses_requests_without_the_header() -> None:
             client.get("/readyz", headers={"x-gaslit-edge": "wrong"}),
             client.get("/readyz", headers={"x-gaslit-edge": SECRET[:-1]}),
         ):
-            assert resp.status_code == 403
-            assert resp.json() == {"error": "forbidden"}
+            # 503, so SDKs retry and recover once a mismatch is fixed, rather than stop.
+            assert (resp.status_code, resp.headers["retry-after"]) == (503, "5")
+            assert resp.json() == {"error": "edge_check_failed"}
 
 
 def test_lets_cloudflare_through_and_hides_the_secret() -> None:
     with TestClient(_app(SECRET)) as client:
-        # Reaches the app: the database is down, so 503 rather than 403.
-        assert client.get("/readyz", headers={"X-Gaslit-Edge": SECRET}).status_code == 503
+        # Reaches the app: the database is down, so readyz's own 503.
+        resp = client.get("/readyz", headers={"X-Gaslit-Edge": SECRET})
+        assert resp.json() == {"status": "unavailable"}
         resp = client.get("/headers", headers={"x-gaslit-edge": SECRET, "x-other": "1"})
     assert resp.status_code == 200
     assert "x-other" in resp.json()

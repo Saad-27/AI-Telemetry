@@ -122,7 +122,7 @@ fly tokens create deploy -a gaslit-worker-production -x 8760h   # GitHub secret 
 
 # 5. First ingest deploy.
 fly deploy server --config "$PWD/deploy/fly/production.toml" --ha=false
-curl https://gaslit-api-production.fly.dev/readyz   # {"status":"ok"}; 403 once step 6.4 is done
+curl https://gaslit-api-production.fly.dev/readyz   # {"status":"ok"}; 503 once step 6.4 is done
 ```
 
 From then on, the deploy workflow does steps 2 and 5 on every merge, worker first. The tokens
@@ -229,13 +229,13 @@ at the app through Cloudflare. Under "Additional DNS records", each hostname has
 2. Run `fly certs check app.gaslit.dev -a gaslit-api-production` until the certificate is issued.
 3. Change the `production` environment's `PUBLIC_URL` to `https://app.gaslit.dev`, and check
    `curl https://app.gaslit.dev/readyz` returns `{"status":"ok"}`.
-4. Close the `*.fly.dev` bypass. The app restarts and from then on answers 403 to anything
+4. Close the `*.fly.dev` bypass. The app restarts and from then on answers 503 to anything
    without Cloudflare's header, except `/healthz` (Fly's own checks):
 
    ```bash
    read -rsp "Edge secret: " EDGE_SECRET && fly secrets set EDGE_SECRET="$EDGE_SECRET" -a gaslit-api-production; unset EDGE_SECRET
    curl https://app.gaslit.dev/readyz                     # {"status":"ok"}
-   curl https://gaslit-api-production.fly.dev/readyz      # {"error":"forbidden"}
+   curl https://gaslit-api-production.fly.dev/readyz      # {"error":"edge_check_failed"}
    ```
 
 ### 7. OAuth apps (needed in M4; can be done now)
@@ -267,7 +267,7 @@ the TypeScript SDK starts.
 |---|---|---|
 | Fly secret, worker app | `DATABASE_URL` | Neon's owner connection string (direct), `sslmode=verify-full`, without `channel_binding` (step 2) |
 | Fly secret, ingest app | `DATABASE_URL` | The same with the `gaslit_ingest` login, made by `app.db.login_role` (step 2) |
-| Fly secret, ingest app | `EDGE_SECRET` | The header value Cloudflare adds; requests without it get 403 (step 6) |
+| Fly secret, ingest app | `EDGE_SECRET` | The header value Cloudflare adds; requests without it get 503 (step 6) |
 | Fly secret, ingest app | OAuth client IDs and secrets, session key | M4 |
 | GitHub `production` env | `FLY_API_TOKEN`, `FLY_WORKER_API_TOKEN`, var `PUBLIC_URL` | Deploy tokens (one per app), smoke-test URL |
 | GitHub repo secrets | `CLOUDFLARE_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `EDGE_SECRET` | Terraform |

@@ -12,7 +12,7 @@ class Settings:
     database_url: str
     # Prometheus metrics on their own port, never the public one (ADR 0021). None: off.
     metrics_port: int | None = None
-    # Values of the header Cloudflare adds (ADR 0027); requests without one get 403. Empty: off,
+    # Values of the header Cloudflare adds (ADR 0027); requests without one get 503. Empty: off,
     # as locally and until the domain goes through Cloudflare. Two during a rotation.
     edge_secrets: tuple[str, ...] = ()
 

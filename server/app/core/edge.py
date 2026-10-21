@@ -2,7 +2,11 @@
 
 `gaslit-api-production.fly.dev` reaches the app directly, around Cloudflare's firewall and
 per-IP rate limit. Cloudflare adds a secret header to every request it forwards; without it,
-the app answers 403 before routing. Pure ASGI: about 2 µs per request either way.
+the app answers 503 before routing. Pure ASGI: about 2 µs per request either way.
+
+503, not 403: a wrong secret is usually our own mistake (a rotation or a Terraform change),
+and the SDK stops sending for good after a 403 but retries a 503, so users recover by
+themselves once it is fixed (ADR 0027).
 
 On requests that pass, Cloudflare's `CF-Connecting-IP` becomes the request's client address,
 so per-IP limits see the real sender. Only then can it be trusted: Cloudflare overwrites the
@@ -19,11 +23,15 @@ CLIENT_IP = b"cf-connecting-ip"
 # Fly's health checks reach the machine directly, without the header. Liveness only: no
 # database work, so open to anyone.
 OPEN_PATHS = frozenset({"/healthz"})
-_BODY = b'{"error":"forbidden"}'
+_BODY = b'{"error":"edge_check_failed"}'
 _START = {
     "type": "http.response.start",
-    "status": 403,
-    "headers": [(b"content-type", b"application/json"), (b"content-length", b"21")],
+    "status": 503,
+    "headers": [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(_BODY)).encode()),
+        (b"retry-after", b"5"),
+    ],
 }
 
 
