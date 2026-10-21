@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-21 (M3: #49 merged; SDK fault messages and edge 503 follow-up; Saad's Fly load test left; alerts paused)
+**Last updated:** 2026-10-21 (M3: #49 and #50 merged and deployed; Saad's Fly load test is next; alerts paused)
 
 ## Where the project is
 
@@ -24,7 +24,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
   no staging (ADR 0006). Saad chose `shared-cpu-1x` until there are many users.
 - **In progress: M3** (ingest and storage). Steps 1-7 merged (#32-#40); step 8 hosting is live
   (#41-#48). **To finish M3** (Saad, 2026-10-21, in this order):
-  0. **Merged #49; then a follow-up PR:** SDK warnings say whose side a failure is on (5xx:
+  0. **Done (#50, deployed by Deploy run 45):** SDK warnings say whose side a failure is on (5xx:
      Gaslit's; network error: either; 400: a Gaslit bug; 401: check the key), and the edge
      check answers 503, not 403, so a secret mismatch no longer silences SDKs until restart
      (ADR 0027 change). Idea for M4: label dashboard gaps where every account stopped at once
@@ -91,7 +91,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | Neon, Fly apps | **Live 2026-10-21** (runbook step 2): Neon Frankfurt, `gaslit-worker-production` and `gaslit-api-production`; `/readyz` ok as `gaslit_ingest` |
 | GitHub `production` environment, `PRODUCTION_ENABLED` | **Done 2026-10-21** (step 4): reviewer Saad, both Fly tokens, `PUBLIC_URL`. Deploy run #37 (attempt 3) green. `infra` environment: not checked |
 | Cloudflare R2 and tokens, Terraform | **Done 2026-10-21.** Account API token, R2 bucket, secrets and variables, `infra` environment (reviewer Saad), `INFRA_ENABLED`. First apply (#45): DNS for `app`/`ingest`, TLS settings, firewall, rate limit, edge header |
-| Certificates, `EDGE_SECRET` on Fly | **Done 2026-10-21** (runbook step 6). Behind the proxy Fly needs `_fly-ownership` TXT and an `_acme-challenge` CNAME (DNS-01) per host; Terraform makes both (#46). Both certificates issued. First `EDGE_SECRET` didn't match the GitHub secret (two values generated); fixed by a fresh value set from one shell variable and an Infra run by hand. Checked: `app.gaslit.dev/readyz` ok, `*.fly.dev` 403. `PUBLIC_URL` → `https://app.gaslit.dev` (step 6.3): confirm with Saad |
+| Certificates, `EDGE_SECRET` on Fly | **Done 2026-10-21** (runbook step 6). Behind the proxy Fly needs `_fly-ownership` TXT and an `_acme-challenge` CNAME (DNS-01) per host; Terraform makes both (#46). Both certificates issued. First `EDGE_SECRET` didn't match the GitHub secret (two values generated); fixed by a fresh value set from one shell variable and an Infra run by hand. Checked: `app.gaslit.dev/readyz` ok, `*.fly.dev` 403 (503 since #50; recheck before the load test). `PUBLIC_URL` → `https://app.gaslit.dev` (step 6.3): confirm with Saad |
 | Google and GitHub OAuth apps | M4 (runbook step 7) |
 
 ## Next: M3 plan (small PRs, in order)
