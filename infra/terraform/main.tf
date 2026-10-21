@@ -33,6 +33,21 @@ resource "cloudflare_dns_record" "fly_ownership" {
   comment = "Fly certificate ownership (managed by Terraform)"
 }
 
+# Lets Fly issue and renew the certificate with a DNS-01 challenge. Behind the proxy, Let's
+# Encrypt cannot reach Fly directly: Cloudflare ends TLS, and with Full (strict) it refuses an
+# origin that has no certificate yet. DNS only: Cloudflare must answer with Fly's target.
+resource "cloudflare_dns_record" "acme_challenge" {
+  for_each = { for name, h in var.hosts : name => h if h.acme_challenge != null }
+
+  zone_id = var.zone_id
+  name    = "_acme-challenge.${each.key}.${var.domain}"
+  type    = "CNAME"
+  content = each.value.acme_challenge
+  proxied = false
+  ttl     = 300
+  comment = "Fly certificate DNS-01 challenge (managed by Terraform)"
+}
+
 # ---- TLS (brief §11.2) -----------------------------------------------------------------
 
 # Full (strict): Cloudflare -> Fly is HTTPS with a valid certificate. "Flexible" would send

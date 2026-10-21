@@ -8,10 +8,12 @@ hosts = {
     fly_app = "gaslit-api-production"
     role    = "app"
     # fly_ownership = "<value from `fly certs setup app.gaslit.dev -a gaslit-api-production`>"
+    # acme_challenge = "<CNAME target from the same command>"
   }
   "ingest" = {
     fly_app = "gaslit-api-production"
     role    = "ingest"
     # fly_ownership = "<value from `fly certs setup ingest.gaslit.dev -a gaslit-api-production`>"
+    # acme_challenge = "<CNAME target from the same command>"
   }
 }

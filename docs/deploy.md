@@ -208,11 +208,23 @@ Then set `INFRA_ENABLED=true`. From now on, merges apply the changes after you a
 ```bash
 fly certs add app.gaslit.dev    -a gaslit-api-production
 fly certs add ingest.gaslit.dev -a gaslit-api-production
-fly certs setup app.gaslit.dev    -a gaslit-api-production   # prints the _fly-ownership value
+fly certs setup app.gaslit.dev    -a gaslit-api-production   # prints the two records below
 fly certs setup ingest.gaslit.dev -a gaslit-api-production
 ```
 
-1. Put each `_fly-ownership` value into `infra/terraform/terraform.tfvars`, then open a PR, merge it and approve the apply.
+Single-hostname certificates cost at most $0.10 a month each on Fly (some plans include a few
+free). Ignore the "route traffic" options `setup` prints: Terraform already points each name
+at the app through Cloudflare. Under "Additional DNS records", each hostname has:
+
+- **Ownership TXT record**, `_fly-ownership.<host>`: proves the domain is ours, since its DNS
+  answers with Cloudflare's addresses rather than Fly's.
+- **ACME DNS Challenge**, a CNAME from `_acme-challenge.<host>` to a `flydns.net` name: lets Let's
+  Encrypt check the domain through DNS (DNS-01). Through the proxy it cannot reach Fly
+  directly, so this is how the certificate is issued and renewed every few months.
+
+1. Put both values for each host into `infra/terraform/terraform.tfvars` (`fly_ownership` and
+   `acme_challenge`), then open a PR, merge it and approve the apply. Terraform makes both
+   records DNS only (grey cloud), as they must be.
 2. Run `fly certs check app.gaslit.dev -a gaslit-api-production` until the certificate is issued.
 3. Change the `production` environment's `PUBLIC_URL` to `https://app.gaslit.dev`, and check
    `curl https://app.gaslit.dev/readyz` returns `{"status":"ok"}`.
