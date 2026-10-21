@@ -64,8 +64,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | Repo visibility | **Public**, which keeps environment approval gates free (ADR 0006). D5 said private; Saad has not changed it |
 | Neon, Fly apps | **Live 2026-10-21** (runbook step 2): Neon Frankfurt, `gaslit-worker-production` and `gaslit-api-production`; `/readyz` ok as `gaslit_ingest` |
 | GitHub `production` environment, `PRODUCTION_ENABLED` | **Done 2026-10-21** (step 4): reviewer Saad, both Fly tokens, `PUBLIC_URL`. Deploy run #37 (attempt 3) green. `infra` environment: not checked |
-| Cloudflare R2 and tokens, Terraform | **2026-10-21:** step 3 done (account API token), step 4 secrets and variables set, step 5 local plan: 9 to add. Lock file (provider 5.28.1) in a PR; then `infra` environment, `INFRA_ENABLED`, merge and approve the apply |
-| Certificates, `EDGE_SECRET` on Fly | **Not started.** Runbook step 6 (6.4 sets `EDGE_SECRET`) |
+| Cloudflare R2 and tokens, Terraform | **Done 2026-10-21.** Account API token, R2 bucket, secrets and variables, `infra` environment (reviewer Saad), `INFRA_ENABLED`. First apply (#45): DNS for `app`/`ingest`, TLS settings, firewall, rate limit, edge header |
+| Certificates, `EDGE_SECRET` on Fly | **In progress.** Runbook step 6. Behind the proxy Fly needs `_fly-ownership` TXT and an `_acme-challenge` CNAME (DNS-01) per host, read from flyctl's source since fly.io is blocked in cloud sessions; Terraform now makes both (`acme_challenge` in `hosts`). Then 6.4 sets `EDGE_SECRET` |
 | Google and GitHub OAuth apps | M4 (runbook step 7) |
 
 ## Next: M3 plan (small PRs, in order)

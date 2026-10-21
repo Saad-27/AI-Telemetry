@@ -13,13 +13,15 @@ variable "hosts" {
   description = <<-EOT
     Subdomain => where it points. `fly_app` is the Fly app it routes to; `role` is "app"
     (dashboard) or "ingest" (SDK traffic, which gets stricter firewall rules).
-    `fly_ownership` is the value of the _fly-ownership TXT record that `fly certs setup`
-    prints; Fly needs it to issue a certificate behind Cloudflare's proxy.
+    `fly_ownership` (the _fly-ownership TXT value) and `acme_challenge` (the _acme-challenge
+    CNAME target) are what `fly certs setup` prints; Fly needs both to issue and renew a
+    certificate behind Cloudflare's proxy.
   EOT
   type = map(object({
-    fly_app       = string
-    role          = string
-    fly_ownership = optional(string)
+    fly_app        = string
+    role           = string
+    fly_ownership  = optional(string)
+    acme_challenge = optional(string)
   }))
 
   validation {
