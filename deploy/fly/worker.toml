@@ -7,9 +7,8 @@
 app = "gaslit-worker-production"
 primary_region = "fra" # D12: EU-hosted, next to Neon
 
-[build]
-  # Same image as the ingest app, built from server/ (the directory passed to `fly deploy`).
-  dockerfile = "Dockerfile"
+# No [build] section: flyctl builds server/Dockerfile, from the directory passed to
+# `fly deploy`. A `dockerfile` set here would be read relative to this file's folder.
 
 [env]
   METRICS_PORT = "9091"
