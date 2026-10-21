@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-21 (M3 step 8: both Fly apps live, deploys from `main` work after approval; Cloudflare next)
+**Last updated:** 2026-10-21 (M3 step 8: edge secret header written, ADR 0027; Saad's Cloudflare steps 3, 5, 6 next)
 
 ## Where the project is
 
@@ -48,6 +48,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0024 | Load test with our own open-loop generator (`tools/loadtest/`, reuses `tests/records.py`; not k6/Locust), locally on Docker limits copying production: app image in 256 MB on 1 core ("burst") or 5 ms/80 ms ("baseline", Fly's `shared-cpu-1x` quota once its burst balance is spent); Postgres at 0.25 CPU (Neon 0.25 CU). Rerun on Fly and Neon at step 8 |
 | 0025 | Load shedding: past 50 ingest requests in progress, `429 overloaded` with a random 3-10 s `Retry-After` (not 503: the SDK drops a batch after three 5xx). `MAX_DECOMPRESSED` 2 MB; a rejected body costs the account one rate-limit token per KB (corrupt gzip: the cap). No per-request limit per account (Saad) |
 | 0026 | **Worker app** `gaslit-worker-production` (no public port, always running, ~$2/month) alone holds Neon's owner URL: migrations as its `release_command`, `maintain` (partitions, totals, retention) at start and hourly. Ingest logs in as `gaslit_ingest` (member of `ingest_writer`), made by `python -m app.db.login_role ingest` over `fly ssh console`, piped into `fly secrets import`. Ingest no longer builds totals. Deploy: worker first, own token each |
+| 0027 | `*.fly.dev` bypass closed by a secret header: Cloudflare sets `X-Gaslit-Edge` (Terraform, sensitive var `edge_secret` from GitHub secret `EDGE_SECRET`); the app (`app/core/edge.py`) answers 403 without it, except `/healthz`, and strips it. On when the Fly secret `EDGE_SECRET` is set; two space-separated values during a rotation. Infra workflow can now be run by hand |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -63,7 +64,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | Repo visibility | **Public**, which keeps environment approval gates free (ADR 0006). D5 said private; Saad has not changed it |
 | Neon, Fly apps | **Live 2026-10-21** (runbook step 2): Neon Frankfurt, `gaslit-worker-production` and `gaslit-api-production`; `/readyz` ok as `gaslit_ingest` |
 | GitHub `production` environment, `PRODUCTION_ENABLED` | **Done 2026-10-21** (step 4): reviewer Saad, both Fly tokens, `PUBLIC_URL`. Deploy run #37 (attempt 3) green. `infra` environment: not checked |
-| Cloudflare R2 and tokens, Terraform, certificates | **Not started.** Runbook steps 3, 5, 6 |
+| Cloudflare R2 and tokens, Terraform, certificates | **Not started.** Runbook steps 3 (now also 3.5, the edge secret), 5, 6 (now also 6.4, `fly secrets set EDGE_SECRET`) |
 | Google and GitHub OAuth apps | M4 (runbook step 7) |
 
 ## Next: M3 plan (small PRs, in order)
@@ -192,10 +193,19 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    Gotcha: the environment must be named exactly `production`; a job naming a missing
    environment makes GitHub create an empty one (no secrets, no reviewer). Then rerun the load test
    against Fly and Neon (`docs/capacity.md`, "How to rerun") and put the number in the README.
-   Floods (from step 7): close the `*.fly.dev` bypass so Cloudflare's per-IP limit (300 per
-   10 s, in Terraform) applies, rerun the bad-key flood through Cloudflare, add the app's
+   Floods (from step 7): rerun the bad-key flood through Cloudflare, add the app's
    per-IP limit on invalid keys, and check whether a machine that scales to zero restarts with
    only a 5 s burst balance.
+   **`*.fly.dev` bypass: done in code, branch `c/blissful-wright-3tvuao`** (ADR 0027): Terraform rule
+   `cloudflare_ruleset.edge_secret`, `app/core/edge.py`, `Settings.edge_secrets`
+   (`EDGE_SECRET`), `tests/test_edge.py`, runbook steps 3.5, 4, 5, 6.4 and the rotation. The
+   Terraform was validated locally with provider 5.28.1 (registry blocked in cloud sessions:
+   binary from GitHub releases into a filesystem mirror); a plan can't run offline because the
+   ruleset resource does a dry run against Cloudflare's API, so check the first CI plan shows
+   the header value as sensitive. **Next PRs:** (a) per-IP limit on invalid keys, reading
+   `CF-Connecting-IP` only behind the edge check; (b) once `EDGE_SECRET` is set on Fly, make
+   `load_settings()` require it on Fly; (c) TLS and the edge header in the load generator for
+   the Fly rerun (it speaks plain HTTP only).
 
 ## Dashboard direction (Saad, 2026-10-17; for M4, and steps 6-7 now)
 
@@ -295,8 +305,8 @@ source, not memory, before relying on it (brief §17).
   2026-10-18 (restored the branch, reopened, retargeted).
 
 - **Security config:** `docs/security-config.md` lists every setting that keeps users'
-  data safe, with status. Check it at each step. Open gap for step 8: requests to
-  `*.fly.dev` skip Cloudflare; proposed fix is a secret header added by Cloudflare.
+  data safe, with status. Check it at each step. The `*.fly.dev` bypass stays open until
+  runbook step 6.4 sets `EDGE_SECRET` on Fly (ADR 0027).
 
 - `sdk/python/src/gaslit/_config.py`: `DEFAULT_ENDPOINT` is still `https://ingest.gaslit.invalid`
   with a stale "until the name is chosen" comment. Change it to `https://ingest.gaslit.dev`
