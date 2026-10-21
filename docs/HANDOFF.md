@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-21 (M3 step 8: worker app and ingest login built (ADR 0026); Saad has Neon and Fly accounts and is doing runbook step 2)
+**Last updated:** 2026-10-21 (M3 step 8: both Fly apps live, deploys from `main` work after approval; Cloudflare next)
 
 ## Where the project is
 
@@ -61,7 +61,9 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | GitHub secret scanning | Saad chose not to enable it |
 | Dependabot alerts and security updates | Enabled 2026-10-17 (ADR 0014). Version-update PRs are off |
 | Repo visibility | **Public**, which keeps environment approval gates free (ADR 0006). D5 said private; Saad has not changed it |
-| Neon, Fly app, Cloudflare tokens, GitHub environments, Terraform, certificates | **Not started.** Runbook steps 2-6 in `docs/deploy.md`, at M3 |
+| Neon, Fly apps | **Live 2026-10-21** (runbook step 2): Neon Frankfurt, `gaslit-worker-production` and `gaslit-api-production`; `/readyz` ok as `gaslit_ingest` |
+| GitHub `production` environment, `PRODUCTION_ENABLED` | **Done 2026-10-21** (step 4): reviewer Saad, both Fly tokens, `PUBLIC_URL`. Deploy run #37 (attempt 3) green. `infra` environment: not checked |
+| Cloudflare R2 and tokens, Terraform, certificates | **Not started.** Runbook steps 3, 5, 6 |
 | Google and GitHub OAuth apps | M4 (runbook step 7) |
 
 ## Next: M3 plan (small PRs, in order)
@@ -186,7 +188,9 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    deployed, migrations ran on Neon, first upkeep logged; the `fly ssh console ... | fly
    secrets import` pipe worked (flyctl's "Connecting to" line goes to stderr). flyctl reads
    `[build] dockerfile` relative to the config file, so both configs dropped it (fix PR on
-   this branch). Then rerun the load test
+   this branch). Deploy workflow green on 2026-10-21 (worker, then app, then `/readyz`).
+   Gotcha: the environment must be named exactly `production`; a job naming a missing
+   environment makes GitHub create an empty one (no secrets, no reviewer). Then rerun the load test
    against Fly and Neon (`docs/capacity.md`, "How to rerun") and put the number in the README.
    Floods (from step 7): close the `*.fly.dev` bypass so Cloudflare's per-IP limit (300 per
    10 s, in Terraform) applies, rerun the bad-key flood through Cloudflare, add the app's
