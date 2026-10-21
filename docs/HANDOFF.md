@@ -42,8 +42,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
      5 s timeout. Cloudflare's per-IP block works (blocked answers in ~21 ms from the edge).
      The generator now reads chunked answers (Cloudflare sends them; 323 misread in the flood
      run). Dashboard reads on Neon were skipped: no history and PC → Frankfurt round trips;
-     measure from M4's dashboard. **Saad: confirm `$L cleanup` ran** (deletes the
-     `load%@localhost` accounts).
+     measure from M4's dashboard. `cleanup` ran afterwards (Saad): the load accounts and
+     their rows are gone.
   3. Leftovers: `ClientDisconnect` **done** (`499 disconnected`, one log line). The
      stopped-machine burst balance is part of Saad's run (capacity.md). **Alerts: paused (Saad,
      2026-10-21: new product, revisit later).** Not an M3 blocker. When revisited, the
