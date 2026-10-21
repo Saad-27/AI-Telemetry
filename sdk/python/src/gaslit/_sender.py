@@ -234,7 +234,9 @@ class Sender:
             return True
         if status in (401, 403):
             _log.warn(
-                "unauthorised", f"The ingest key was rejected (HTTP {status}). Sending has stopped."
+                "unauthorised",
+                f"The ingest key was rejected (HTTP {status}): check GASLIT_KEY, or whether the "
+                "key was revoked. Sending has stopped for this process.",
             )
             self._pending.clear()
             with self._cond:
@@ -254,12 +256,30 @@ class Sender:
                 delay = RETRY_DELAYS_S[self._attempt] * (0.5 + random.random())  # noqa: S311
                 self._attempt += 1
                 self._not_before = time.monotonic() + delay
+            elif status is None:
+                # Says whose side it is where the SDK can know: users should not have to debug
+                # an outage of ours. A network error can be either side.
+                _log.warn(
+                    "send_failed",
+                    "Could not reach the Gaslit ingest API (network error or timeout); dropped "
+                    "a batch after retrying. The cause may be your network or Gaslit's side. "
+                    "Your app is not affected.",
+                )
+                self._drop()
             else:
-                _log.warn("send_failed", "Could not reach the ingest API; dropped a batch.")
+                _log.warn(
+                    "server_error",
+                    f"The Gaslit ingest API failed (HTTP {status}); dropped a batch after "
+                    "retrying. This is on Gaslit's side, not your setup. Your app is not affected.",
+                )
                 self._drop()
             return False
         # 400, an unsplittable 413, a redirect or another 4xx: retrying can't help.
-        _log.warn("rejected", f"The ingest API rejected a batch (HTTP {status}); dropped it.")
+        _log.warn(
+            "rejected",
+            f"The Gaslit ingest API rejected a batch (HTTP {status}); dropped it. This points to "
+            "a Gaslit bug, not your setup.",
+        )
         self._drop()
         return True
 

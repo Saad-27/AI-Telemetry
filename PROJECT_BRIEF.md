@@ -496,7 +496,7 @@ Keep the allowlist in one shared module in the SDK and re-validate it on the ser
 | `401` / `403` | Key invalid or revoked: **stop sending for this process** and log one warning |
 | `413` | Split the batch in half and retry once |
 | `429` | Respect `Retry-After` (capped at 5 min) and keep the bounded queue |
-| `5xx` / network error | Retry with exponential backoff and jitter (~1 s, 2 s, 4 s), then drop the batch |
+| `5xx` / network error | Retry with exponential backoff and jitter (~1 s, 2 s, 4 s), then drop the batch and log once. The warning says whose side it is: a `5xx` is Gaslit's, a network error may be either |
 
 **Lifecycle**
 

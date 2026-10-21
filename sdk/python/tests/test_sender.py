@@ -107,7 +107,10 @@ def test_retries_reuse_ids_then_succeed(ingest: FakeIngest) -> None:
     assert len({b["samples"][0]["event_id"] for b in bodies}) == 1
 
 
-def test_batch_dropped_after_retries_and_reported(ingest: FakeIngest) -> None:
+def test_batch_dropped_after_retries_and_reported(
+    ingest: FakeIngest, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="gaslit")
     ingest.script(500, 500, 500, 500)
     start(ingest)
     calls(1)
@@ -117,6 +120,20 @@ def test_batch_dropped_after_retries_and_reported(ingest: FakeIngest) -> None:
     reqs = ingest.wait_for(5)
     assert [r.status for r in reqs] == [500, 500, 500, 500, 202]
     assert ingest.accepted()[0]["dropped_since_last"] == 2  # one summary, one sample
+    assert "HTTP 500" in caplog.text and "on Gaslit's side, not your setup" in caplog.text
+
+
+def test_network_errors_say_either_side_may_be_at_fault(
+    ingest: FakeIngest, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="gaslit")
+    ingest.script(GARBAGE, GARBAGE, GARBAGE, GARBAGE)
+    start(ingest)
+    calls(1)
+    gaslit.flush()
+    assert len(ingest.wait_for(4)) == 4
+    assert "your network or Gaslit's side" in caplog.text
+    assert "HTTP" not in caplog.text
 
 
 def test_429_waits_for_retry_after(ingest: FakeIngest) -> None:
@@ -185,6 +202,7 @@ def test_rejected_key_stops_the_sdk(
     gaslit.flush()
     assert len(ingest.received) == 1
     assert caplog.text.count("Sending has stopped") == 1
+    assert "check GASLIT_KEY" in caplog.text
 
 
 def test_redirect_is_not_followed(ingest: FakeIngest) -> None:

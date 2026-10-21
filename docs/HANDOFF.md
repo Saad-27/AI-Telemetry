@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-21 (M3: per-IP limit on invalid keys, quiet disconnects, load generator ready for Fly; Saad's Fly run and the alerts decision left)
+**Last updated:** 2026-10-21 (M3: #49 merged; SDK fault messages and edge 503 follow-up; Saad's Fly load test left; alerts paused)
 
 ## Where the project is
 
@@ -20,11 +20,16 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 - **Hosted since 2026-10-21:** `https://app.gaslit.dev` and `https://ingest.gaslit.dev` through
   Cloudflare (Terraform, applied by the Infra workflow after Saad approves) to the Fly app
   `gaslit-api-production`; worker `gaslit-worker-production`; Neon Frankfurt. Deploys from
-  `main` after Saad approves. `*.fly.dev` answers 403 (edge secret, ADR 0027). Production only,
+  `main` after Saad approves. `*.fly.dev` answers 503 (edge secret, ADR 0027). Production only,
   no staging (ADR 0006). Saad chose `shared-cpu-1x` until there are many users.
 - **In progress: M3** (ingest and storage). Steps 1-7 merged (#32-#40); step 8 hosting is live
   (#41-#48). **To finish M3** (Saad, 2026-10-21, in this order):
-  1. **Done, branch `m3-finish`:** per-IP limit on invalid keys (ADR 0028). `EdgeOnly` makes
+  0. **Merged #49; then a follow-up PR:** SDK warnings say whose side a failure is on (5xx:
+     Gaslit's; network error: either; 400: a Gaslit bug; 401: check the key), and the edge
+     check answers 503, not 403, so a secret mismatch no longer silences SDKs until restart
+     (ADR 0027 change). Idea for M4: label dashboard gaps where every account stopped at once
+     as "Gaslit outage, not your app".
+  1. **Done (#49):** per-IP limit on invalid keys (ADR 0028). `EdgeOnly` makes
      `CF-Connecting-IP` the client address, only behind the edge check. Keys already cached skip
      the check; others wait (`429 too_many_invalid_keys`) while their IP's bucket (20, one per
      2 s, IPv6 per /64) is empty. Locally: 200 unknown keys/s → DB lookups ~0.5/s after a first
@@ -68,7 +73,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0024 | Load test with our own open-loop generator (`tools/loadtest/`, reuses `tests/records.py`; not k6/Locust), locally on Docker limits copying production: app image in 256 MB on 1 core ("burst") or 5 ms/80 ms ("baseline", Fly's `shared-cpu-1x` quota once its burst balance is spent); Postgres at 0.25 CPU (Neon 0.25 CU). Rerun on Fly and Neon at step 8 |
 | 0025 | Load shedding: past 50 ingest requests in progress, `429 overloaded` with a random 3-10 s `Retry-After` (not 503: the SDK drops a batch after three 5xx). `MAX_DECOMPRESSED` 2 MB; a rejected body costs the account one rate-limit token per KB (corrupt gzip: the cap). No per-request limit per account (Saad) |
 | 0026 | **Worker app** `gaslit-worker-production` (no public port, always running, ~$2/month) alone holds Neon's owner URL: migrations as its `release_command`, `maintain` (partitions, totals, retention) at start and hourly. Ingest logs in as `gaslit_ingest` (member of `ingest_writer`), made by `python -m app.db.login_role ingest` over `fly ssh console`, piped into `fly secrets import`. Ingest no longer builds totals. Deploy: worker first, own token each |
-| 0027 | `*.fly.dev` bypass closed by a secret header: Cloudflare sets `X-Gaslit-Edge` (Terraform, sensitive var `edge_secret` from GitHub secret `EDGE_SECRET`); the app (`app/core/edge.py`) answers 403 without it, except `/healthz`, and strips it. On when the Fly secret `EDGE_SECRET` is set; two space-separated values during a rotation. Infra workflow can now be run by hand |
+| 0027 | `*.fly.dev` bypass closed by a secret header: Cloudflare sets `X-Gaslit-Edge` (Terraform, sensitive var `edge_secret` from GitHub secret `EDGE_SECRET`); the app (`app/core/edge.py`) answers 503 without it (403 until 2026-10-21: a 403 stops every SDK for good), except `/healthz`, and strips it. On when the Fly secret `EDGE_SECRET` is set; two space-separated values during a rotation. Infra workflow can now be run by hand |
 | 0028 | Per-IP limit on invalid keys: `CF-Connecting-IP` is the client address only behind the edge check; cached keys skip the limit; 20 per IP, one per 2 s, IPv6 per /64; `429 too_many_invalid_keys` (not 401, which stops the SDK). Client disconnects mid-body → `499 disconnected`. Proposed: numbers for Saad |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
