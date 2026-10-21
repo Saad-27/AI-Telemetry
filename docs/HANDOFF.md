@@ -64,7 +64,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | Repo visibility | **Public**, which keeps environment approval gates free (ADR 0006). D5 said private; Saad has not changed it |
 | Neon, Fly apps | **Live 2026-10-21** (runbook step 2): Neon Frankfurt, `gaslit-worker-production` and `gaslit-api-production`; `/readyz` ok as `gaslit_ingest` |
 | GitHub `production` environment, `PRODUCTION_ENABLED` | **Done 2026-10-21** (step 4): reviewer Saad, both Fly tokens, `PUBLIC_URL`. Deploy run #37 (attempt 3) green. `infra` environment: not checked |
-| Cloudflare R2 and tokens, Terraform, certificates | **Not started.** Runbook steps 3 (now also 3.5, the edge secret), 5, 6 (now also 6.4, `fly secrets set EDGE_SECRET`) |
+| Cloudflare R2 and tokens, Terraform | **2026-10-21:** step 3 done (account API token), step 4 secrets and variables set, step 5 local plan: 9 to add. Lock file (provider 5.28.1) in a PR; then `infra` environment, `INFRA_ENABLED`, merge and approve the apply |
+| Certificates, `EDGE_SECRET` on Fly | **Not started.** Runbook step 6 (6.4 sets `EDGE_SECRET`) |
 | Google and GitHub OAuth apps | M4 (runbook step 7) |
 
 ## Next: M3 plan (small PRs, in order)

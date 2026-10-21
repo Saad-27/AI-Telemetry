@@ -132,14 +132,19 @@ from sleep. The deploy smoke test retries for about 30 s to cover this.
 
 ### 3. Cloudflare (Terraform access)
 1. **State bucket:** R2 > Create bucket `gaslit-tfstate`, with location hint Western Europe.
+   The first time, R2 asks you to add the R2 subscription (a checkout that may ask for a
+   card). The state file is a few KB, far inside the free 10 GB a month, so it costs $0.
 2. **State credentials:** R2 > Manage API tokens > Create: **Object Read & Write**, limited to
    the `gaslit-tfstate` bucket. This gives an Access Key ID and Secret Access Key. The
    endpoint is `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
-3. **Terraform's API token:** My Profile > API Tokens > Create custom token, with these
-   permissions:
+3. **Terraform's API token:** Manage account > Account API tokens > Create Token. An account
+   token, not a user one: Cloudflare recommends them for CI, and every product used here
+   supports them. Give it these permissions and an expiry about a year out:
    - Zone > DNS > Edit
    - Zone > Zone Settings > Edit
    - Zone > Zone WAF > Edit
+   - Zone > Transform Rules > Edit (the edge secret header, step 3.5)
+   - Account > Account Rulesets > Read (Cloudflare lists it as needed for transform rules)
 
    Zone resources: Include > Specific zone > `gaslit.dev`. If an apply fails with a permission
    error on a ruleset, add the permission it names.
@@ -158,7 +163,7 @@ from sleep. The deploy smoke test retries for about 30 s to cover this.
 | Environment | Protection | Secrets | Variables |
 |---|---|---|---|
 | `production` | Required reviewer: you. Deployment branches: `main` only | `FLY_API_TOKEN`, `FLY_WORKER_API_TOKEN` (from step 2) | `PUBLIC_URL` = `https://gaslit-api-production.fly.dev` |
-| `infra` | Required reviewer: you. Branches: `main` | none | none |
+| `infra` | Required reviewer: you. Branches: `main`. Create it **before** setting `INFRA_ENABLED`: a job naming a missing environment makes GitHub create an empty one, with no reviewer | none | none |
 
 Required reviewers on environments are free only on public repositories. If the repo goes
 private, they need GitHub Enterprise, and both approval gates would stop working.
