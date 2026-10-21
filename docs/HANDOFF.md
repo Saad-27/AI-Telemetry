@@ -17,11 +17,22 @@ session, in the same PR as the session's other changes, so it reaches `main`.
   `app/ingest/limits.py`, `app/core/entitlements.py`). The examples send to the
   local server: `make dev`, `make dev-key`, then `GASLIT_ENDPOINT=http://127.0.0.1:8000` and the
   printed `GASLIT_KEY` (`examples/README.md`).
-- **Deployment:** written but switched off (repo variables `PRODUCTION_ENABLED`, `INFRA_ENABLED`
-  unset). Production only, no staging (ADR 0006). Nothing is hosted or paid for until M3 (ADR 0007).
-- **In progress: M3** (ingest and storage), plan below. Steps 1-7 are merged (#32-#40).
-  Hosting (step 8) is next; confirm costs with Saad first. Saad chose to start on
-  `shared-cpu-1x` and upgrade only once there are many users.
+- **Hosted since 2026-10-21:** `https://app.gaslit.dev` and `https://ingest.gaslit.dev` through
+  Cloudflare (Terraform, applied by the Infra workflow after Saad approves) to the Fly app
+  `gaslit-api-production`; worker `gaslit-worker-production`; Neon Frankfurt. Deploys from
+  `main` after Saad approves. `*.fly.dev` answers 403 (edge secret, ADR 0027). Production only,
+  no staging (ADR 0006). Saad chose `shared-cpu-1x` until there are many users.
+- **In progress: M3** (ingest and storage). Steps 1-7 merged (#32-#40); step 8 hosting is live
+  (#41-#46 and the edge-secret PR). **To finish M3** (Saad, 2026-10-21, in this order):
+  1. Per-IP limit on invalid keys, trusting `CF-Connecting-IP` (only requests that passed the
+     edge check reach the app now).
+  2. Load test against Fly and Neon: the generator needs TLS and the `X-Gaslit-Edge` header
+     first (plain HTTP only today); Saad runs it from his machine; the number goes in the
+     README (`docs/capacity.md`, "How to rerun").
+  3. Leftovers: quiet `ClientDisconnect` tracebacks; whether a machine that scaled to zero
+     restarts with only a small burst balance; Grafana alerts from runbook step 2.
+- **Then M4**, the website: mockup for Saad's approval first, OAuth apps (runbook step 7),
+  projects and keys, dashboard. See "Dashboard direction" below.
 
 ## Decisions made recently (details in the ADRs)
 
@@ -186,28 +197,19 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    `deploy/fly/worker.toml`, worker step in `deploy.yml` (secret `FLY_WORKER_API_TOKEN`),
    compose `worker` service. `Totals` (in-app builder) and its two metrics removed. The
    end-to-end test now runs the app as `gaslit_ingest`; checked with passwords required.
-   Runbook step 2 rewritten for the two apps. **Hosting progress (2026-10-21):** worker
-   deployed, migrations ran on Neon, first upkeep logged; the `fly ssh console ... | fly
-   secrets import` pipe worked (flyctl's "Connecting to" line goes to stderr). flyctl reads
-   `[build] dockerfile` relative to the config file, so both configs dropped it (fix PR on
-   this branch). Deploy workflow green on 2026-10-21 (worker, then app, then `/readyz`).
-   Gotcha: the environment must be named exactly `production`; a job naming a missing
-   environment makes GitHub create an empty one (no secrets, no reviewer). Then rerun the load test
-   against Fly and Neon (`docs/capacity.md`, "How to rerun") and put the number in the README.
-   Floods (from step 7): rerun the bad-key flood through Cloudflare, add the app's
-   per-IP limit on invalid keys, and check whether a machine that scales to zero restarts with
-   only a 5 s burst balance.
-   **`*.fly.dev` bypass: done in code, branch `c/blissful-wright-3tvuao`** (ADR 0027): Terraform rule
-   `cloudflare_ruleset.edge_secret`, `app/core/edge.py`, `Settings.edge_secrets`
-   (`EDGE_SECRET`), `tests/test_edge.py`, runbook steps 3.5, 4, 5, 6.4 and the rotation. The
-   Terraform was validated locally with provider 5.28.1 (registry blocked in cloud sessions:
-   binary from GitHub releases into a filesystem mirror); a plan can't run offline because the
-   ruleset resource does a dry run against Cloudflare's API, so check the first CI plan shows
-   the header value as sensitive. **Next PRs:** (a) per-IP limit on invalid keys, reading
-   `CF-Connecting-IP` only behind the edge check; (b) once `EDGE_SECRET` is set on Fly, make
-   `load_settings()` require it on Fly (done: `require_edge_secret` in `create_app`, the worker
-   is exempt); (c) TLS and the edge header in the load generator for the Fly rerun (it speaks
-   plain HTTP only).
+   Runbook step 2 rewritten for the two apps.
+   **Hosting: live 2026-10-21** (runbook steps 2-6 done). Gotchas met: flyctl reads `[build]
+   dockerfile` relative to the config file (both configs dropped it); a job naming a missing
+   GitHub environment makes GitHub create an empty one with no reviewer, so create
+   `production`/`infra` first; the Terraform registry and fly.io are blocked in cloud sessions
+   (provider binaries come from GitHub releases into a filesystem mirror; Fly behaviour was
+   read from flyctl's source); the ruleset resource dry-runs against Cloudflare's API, so
+   plans only run in CI or on Saad's machine.
+   **`*.fly.dev` bypass closed** (ADR 0027): Terraform rule `cloudflare_ruleset.edge_secret`,
+   `app/core/edge.py`, `Settings.edge_secrets` (`EDGE_SECRET`), `require_edge_secret` in
+   `create_app` (worker exempt), `tests/test_edge.py`. **Certificates:** behind the proxy Fly
+   needs `_fly-ownership` TXT and `_acme-challenge` CNAME per host (`hosts` in
+   `terraform.tfvars`). **Still open:** the three "To finish M3" items at the top.
 
 ## Dashboard direction (Saad, 2026-10-17; for M4, and steps 6-7 now)
 
