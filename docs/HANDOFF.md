@@ -34,12 +34,12 @@ session, in the same PR as the session's other changes, so it reaches `main`.
      (deletes `load%@localhost` accounts and their rows; checked locally). Commands in
      `docs/capacity.md`, "At step 8". Then put the number in the README.
   3. Leftovers: `ClientDisconnect` **done** (`499 disconnected`, one log line). The
-     stopped-machine burst balance is part of Saad's run (capacity.md). **Alerts: needs Saad.**
-     Fly's docs say "Fly.io doesn't include built-in alerting on metrics", so runbook step 2's
-     "set alerts in fly-metrics.net" may not be possible. Not yet checked in the UI. Options to
-     put to him: check fly-metrics.net's Alerting menu first; else Grafana Cloud's free tier
-     reading Fly's Prometheus with a read-only token (a new external service); else a
-     tiny check in the worker (code, no new service).
+     stopped-machine burst balance is part of Saad's run (capacity.md). **Alerts: paused (Saad,
+     2026-10-21: new product, revisit later).** Not an M3 blocker. When revisited, the
+     proposal was 4 alerts: ingest unreachable from outside (needs an external uptime check),
+     503s over ~5% for 5 min, no worker upkeep in 3 h, quota flushes failing; the rest on a
+     dashboard. Fly's docs say "Fly.io doesn't include built-in alerting on metrics"; options:
+     fly-metrics.net's UI (unchecked), Grafana Cloud free tier, or a check in the worker.
 - **Then M4**, the website: mockup for Saad's approval first, OAuth apps (runbook step 7),
   projects and keys, dashboard. See "Dashboard direction" below.
 
