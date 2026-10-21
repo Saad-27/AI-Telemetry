@@ -177,9 +177,13 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    the machine running anyway, so it only matters when nobody sends), and close the
    `*.fly.dev` bypass with the secret Cloudflare header. `release_command = "alembic upgrade
    head"` is on, so the first deploy creates the tables; until the login roles exist,
-   `DATABASE_URL` is Neon's owner URL. **Waiting on Saad:** how the jobs get owner rights
-   (explained to him in plain terms: a second owner URL used only by the jobs and migrations,
-   recommended, or owner-run SQL functions). Then rerun the load test
+   `DATABASE_URL` is Neon's owner URL. **Owner rights (Saad, 2026-10-21):** ingest only
+   writes, the dashboard only reads, and cleanup runs as its own job apart from both. Proposed
+   to him, **awaiting his yes:** a second Fly app (`gaslit-jobs-production`, no public port)
+   holding the only owner URL, as an hourly scheduled machine (ADR 0020 option 2) running
+   partitions, retention and the totals build; migrations move there too, since Fly secrets
+   are per app and `release_command` would put the owner URL on the ingest app. Write an ADR
+   superseding the in-app part of 0020 and 0023. Then rerun the load test
    against Fly and Neon (`docs/capacity.md`, "How to rerun") and put the number in the README.
    Floods (from step 7): close the `*.fly.dev` bypass so Cloudflare's per-IP limit (300 per
    10 s, in Terraform) applies, rerun the bad-key flood through Cloudflare, add the app's
