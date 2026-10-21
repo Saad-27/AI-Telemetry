@@ -182,9 +182,11 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    `deploy/fly/worker.toml`, worker step in `deploy.yml` (secret `FLY_WORKER_API_TOKEN`),
    compose `worker` service. `Totals` (in-app builder) and its two metrics removed. The
    end-to-end test now runs the app as `gaslit_ingest`; checked with passwords required.
-   Runbook step 2 rewritten for the two apps. **Unverified until Saad runs it:** the
-   `fly ssh console ... | fly secrets import` pipe (flyctl output on stdout would break it;
-   `fly secrets list` shows whether it worked). Then rerun the load test
+   Runbook step 2 rewritten for the two apps. **Hosting progress (2026-10-21):** worker
+   deployed, migrations ran on Neon, first upkeep logged; the `fly ssh console ... | fly
+   secrets import` pipe worked (flyctl's "Connecting to" line goes to stderr). flyctl reads
+   `[build] dockerfile` relative to the config file, so both configs dropped it (fix PR on
+   this branch). Then rerun the load test
    against Fly and Neon (`docs/capacity.md`, "How to rerun") and put the number in the README.
    Floods (from step 7): close the `*.fly.dev` bypass so Cloudflare's per-IP limit (300 per
    10 s, in Terraform) applies, rerun the bad-key flood through Cloudflare, add the app's
