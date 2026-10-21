@@ -50,5 +50,5 @@ Option 1.
 - Refused requests still cost Fly's proxy and uvicorn's HTTP parsing; a large flood straight at
   `*.fly.dev` can still load the machine, just far less than before. Revisit (Tunnel, option 4)
   if that happens.
-- Not required on Fly yet, so the bypass stays open until runbook step 6.4. Once it is set,
-  make `load_settings()` refuse to start on Fly without it, as it does for `sslmode`.
+- Set on Fly 2026-10-21. Since then the public app (`create_app`) refuses to start on Fly
+  without it; the worker, which has no public port, does not need it.

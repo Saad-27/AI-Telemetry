@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from prometheus_client import start_http_server
 
-from app.core.config import Settings, load_settings
+from app.core.config import Settings, load_settings, require_edge_secret
 from app.core.edge import EdgeOnly
 from app.db import DB_TIMEOUT_S
 from app.ingest.keys import KeyStore
@@ -21,6 +21,7 @@ log = logging.getLogger(__name__)
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
+    require_edge_secret(settings)
     # Uvicorn configures only its own loggers; this shows the app's INFO lines too.
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 

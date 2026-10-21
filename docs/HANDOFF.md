@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-21 (M3 step 8: edge secret header written, ADR 0027; Saad's Cloudflare steps 3, 5, 6 next)
+**Last updated:** 2026-10-21 (M3 step 8: Cloudflare, Terraform, certificates and the edge secret live; per-IP limit on invalid keys next)
 
 ## Where the project is
 
@@ -65,7 +65,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | Neon, Fly apps | **Live 2026-10-21** (runbook step 2): Neon Frankfurt, `gaslit-worker-production` and `gaslit-api-production`; `/readyz` ok as `gaslit_ingest` |
 | GitHub `production` environment, `PRODUCTION_ENABLED` | **Done 2026-10-21** (step 4): reviewer Saad, both Fly tokens, `PUBLIC_URL`. Deploy run #37 (attempt 3) green. `infra` environment: not checked |
 | Cloudflare R2 and tokens, Terraform | **Done 2026-10-21.** Account API token, R2 bucket, secrets and variables, `infra` environment (reviewer Saad), `INFRA_ENABLED`. First apply (#45): DNS for `app`/`ingest`, TLS settings, firewall, rate limit, edge header |
-| Certificates, `EDGE_SECRET` on Fly | **In progress.** Runbook step 6. Behind the proxy Fly needs `_fly-ownership` TXT and an `_acme-challenge` CNAME (DNS-01) per host, read from flyctl's source since fly.io is blocked in cloud sessions; Terraform now makes both (`acme_challenge` in `hosts`). Then 6.4 sets `EDGE_SECRET` |
+| Certificates, `EDGE_SECRET` on Fly | **Done 2026-10-21** (runbook step 6). Behind the proxy Fly needs `_fly-ownership` TXT and an `_acme-challenge` CNAME (DNS-01) per host; Terraform makes both (#46). Both certificates issued. First `EDGE_SECRET` didn't match the GitHub secret (two values generated); fixed by a fresh value set from one shell variable and an Infra run by hand. Checked: `app.gaslit.dev/readyz` ok, `*.fly.dev` 403. `PUBLIC_URL` → `https://app.gaslit.dev` (step 6.3): confirm with Saad |
 | Google and GitHub OAuth apps | M4 (runbook step 7) |
 
 ## Next: M3 plan (small PRs, in order)
@@ -205,8 +205,9 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    ruleset resource does a dry run against Cloudflare's API, so check the first CI plan shows
    the header value as sensitive. **Next PRs:** (a) per-IP limit on invalid keys, reading
    `CF-Connecting-IP` only behind the edge check; (b) once `EDGE_SECRET` is set on Fly, make
-   `load_settings()` require it on Fly; (c) TLS and the edge header in the load generator for
-   the Fly rerun (it speaks plain HTTP only).
+   `load_settings()` require it on Fly (done: `require_edge_secret` in `create_app`, the worker
+   is exempt); (c) TLS and the edge header in the load generator for the Fly rerun (it speaks
+   plain HTTP only).
 
 ## Dashboard direction (Saad, 2026-10-17; for M4, and steps 6-7 now)
 
