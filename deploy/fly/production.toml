@@ -2,7 +2,8 @@
 # you approve the run in GitHub (the `production` environment). Off until the
 # PRODUCTION_ENABLED repo variable is "true". Until M3 splits ingest and web-api into separate
 # apps, this one app serves both hostnames. Secrets (DATABASE_URL, ...) are never in this
-# file: set them with `fly secrets set -a gaslit-api-production`. See docs/deploy.md.
+# file: set them with `fly secrets set -a gaslit-api-production`. See docs/deploy.md. The
+# worker app (worker.toml) runs migrations and upkeep.
 
 app = "gaslit-api-production"
 primary_region = "fra" # D12: EU-hosted
@@ -21,11 +22,8 @@ primary_region = "fra" # D12: EU-hosted
   port = 9091
   path = "/metrics"
 
-# Migrations run once per deploy on a temporary machine with the app's secrets, before new
-# machines start. If one fails, the deploy stops and the running version stays. The app makes
-# this week's partitions itself at startup (ADR 0020).
-[deploy]
-  release_command = "alembic upgrade head"
+# No release_command: migrations need the schema owner, whose connection string only the
+# worker app has (worker.toml, ADR 0026). This app's DATABASE_URL can only write.
 
 [http_service]
   internal_port = 8000

@@ -31,5 +31,18 @@ services:
       postgres:
         condition: service_healthy
 
+  # Partitions, totals and retention every hour (ADR 0026), as in production. Locally both
+  # connect as the owner; `make migrate` makes the schema first.
+  worker:
+    build: ./server
+    command: ["python", "-m", "app.worker"]
+    environment:
+      DATABASE_URL: postgresql://app:${POSTGRES_PASSWORD:-app}@postgres:5432/app
+    volumes:
+      - ./server/app:/srv/app:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:

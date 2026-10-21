@@ -1,0 +1,35 @@
+# The worker (brief §9.8, ADR 0026): partition upkeep, the dashboard's totals and retention,
+# every hour, plus migrations on each deploy. Its own Fly app because Fly secrets belong to an
+# app: this one's DATABASE_URL is the schema owner's, and only this app has it. The ingest
+# app's DATABASE_URL is a login that can only write (app.db.login_role). No public port.
+# Deployed by the same workflow, before the ingest app. See docs/deploy.md.
+
+app = "gaslit-worker-production"
+primary_region = "fra" # D12: EU-hosted, next to Neon
+
+[build]
+  # Same image as the ingest app, built from server/ (the directory passed to `fly deploy`).
+  dockerfile = "Dockerfile"
+
+[env]
+  METRICS_PORT = "9091"
+
+# Migrations run once per deploy on a temporary machine, before the worker restarts and
+# before the ingest app is deployed. If one fails, the workflow stops and both keep running
+# the previous version.
+[deploy]
+  release_command = "alembic upgrade head"
+
+# Upkeep metrics (ADR 0021), scraped by Fly over its private network.
+[metrics]
+  port = 9091
+  path = "/metrics"
+
+# Replaces the image's CMD (uvicorn). Always running: Fly stops machines for lack of traffic
+# only behind [http_service], which this app has none of.
+[processes]
+  worker = "python -m app.worker"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

@@ -9,10 +9,7 @@ from fastapi.responses import JSONResponse
 from prometheus_client import start_http_server
 
 from app.core.config import Settings, load_settings
-from app.core.entitlements import longest_retention_days
 from app.db import DB_TIMEOUT_S
-from app.db.partitions import maintain_daily
-from app.db.totals import Totals
 from app.ingest.keys import KeyStore
 from app.ingest.limits import Quota, RateLimiter
 from app.ingest.routes import router as ingest_router
@@ -39,13 +36,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.sink = PostgresSink(app.state.pool)
         app.state.rate = RateLimiter()
         app.state.in_flight = 0  # ingest requests being handled; capped to shed load (ADR 0025)
-        # The dashboard's totals, built while this machine receives summaries (ADR 0023).
-        totals = app.state.totals = Totals(app.state.pool)
         flusher = asyncio.create_task(quota.flush_every())
-        builder = asyncio.create_task(totals.build_every())
-        # Partitions and retention, at startup and then once a day (ADR 0020). In the
-        # background, so the app starts even while the database is down.
-        upkeep = asyncio.create_task(maintain_daily(app.state.pool, longest_retention_days()))
+        # Partitions, totals and retention run in the worker (app.worker), which alone holds
+        # the owner's login; this app's login cannot do them (ADR 0026).
         # Fly scrapes this port over its private network; it is not in [http_service], so it
         # is never public. A thread, so a scrape never waits for the event loop.
         port = settings.metrics_port
@@ -53,10 +46,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             yield
         finally:
-            for task in (flusher, builder, upkeep):
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
+            flusher.cancel()
+            with suppress(asyncio.CancelledError):
+                await flusher
             await quota.flush_logged()  # Fly stops idle machines; keep their counts
             await app.state.pool.close()
             if metrics is not None:

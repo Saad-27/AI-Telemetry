@@ -34,7 +34,7 @@ Deployment grows with the code, so each piece arrives when the milestone that ne
 |---|---|---|---|
 | **Done** | Fly config, deploy and infra workflows, Terraform for Cloudflare, ADRs 0005-0007, this runbook, placeholder rename | Steps 0, 1 and 8 below: MFA, domain, PyPI name | Free or near-free, and the names could be taken |
 | **M2** | Nothing new for deployment | Nothing | SDK work runs in users' apps, not on our servers |
-| **M3** | Alembic `release_command` turned on in `production.toml`. Separate Fly apps for `ingest` and `worker` (the worker has no public port) only when load needs it (brief §20), with `ingest` pointed at the ingest app in `terraform.tfvars`. Load test, with results in `docs/capacity.md` | Steps 2-6: Neon database, Fly app, Cloudflare tokens, GitHub settings, first Terraform run, certificates | First real database schema and first thing worth hosting. Nothing is paid for before this (ADR 0007) |
+| **M3** | The `worker` app (no public port): migrations as its `release_command`, upkeep every hour, the only holder of the owner's login (ADR 0026). A separate `ingest` app only when load needs it (brief §20), with `ingest` pointed at it in `terraform.tfvars`. Load test, with results in `docs/capacity.md` | Steps 2-6: Neon database, Fly app, Cloudflare tokens, GitHub settings, first Terraform run, certificates | First real database schema and first thing worth hosting. Nothing is paid for before this (ADR 0007) |
 | **M4** | Web SPA build in the deploy, OAuth and session-key settings, security headers | Step 7 (OAuth apps), then `fly secrets set` for the client IDs, secrets and session key | Login and the dashboard need them. Production becomes a clickable website |
 | **M5** | Status poller inside the worker | Nothing | Outbound requests only, so no infrastructure change |
 | **M7** | `release.yml` for PyPI Trusted Publishing, base images pinned by digest, uptime check, Grafana | A tested backup restore, step 8. Decide whether alpha needs a staging app (ADR 0006) | Launch: the security checklist in brief §11.11 must be fully ticked |
@@ -85,35 +85,47 @@ then costs at most about $19.35 a month ($0.106 per CU-hour × 730 hours), howev
 arrives. Past its capacity, ingest slows and returns 503, and SDKs retry or drop. Storage, the
 other cost, is bounded by `entitlements()` ([ADR 0017](decisions/0017-rate-limit-and-quota.md)).
 Raise the size only when the load test or production metrics show it is needed. Metrics are in
-Fly's Grafana at fly-metrics.net once the app is deployed (ADR 0021): set alerts there for no
-successful partition run in 2 days, 503s, quota flush failures, ingest p95 latency over 200 ms
-dashboard query p95 over 100 ms (ADR 0022's target), and any failed totals build (ADR 0023).
+Fly's Grafana at fly-metrics.net once the apps are deployed (ADR 0021): set alerts there for
+no successful worker upkeep in 3 hours (`gaslit_partitions_last_success_timestamp_seconds`,
+ADR 0026), 503s, quota flush failures, ingest p95 latency over 200 ms, and dashboard query p95
+over 100 ms (ADR 0022's target).
 
-**Fly:** install `flyctl` and run `fly auth login`, then:
+**Fly** ([ADR 0026](decisions/0026-worker-app-and-login-roles.md)): two apps. The worker
+holds Neon's owner connection string and runs migrations and upkeep; the ingest app logs in as
+`gaslit_ingest`, which can only write. Install `flyctl`, run `fly auth login`, then from the
+repo root:
 
 ```bash
 # App names are global on Fly. If one is taken, choose another and update
-# deploy/fly/production.toml and infra/terraform/terraform.tfvars to match.
+# deploy/fly/*.toml and infra/terraform/terraform.tfvars to match.
 fly apps create gaslit-api-production
+fly apps create gaslit-worker-production
 
-# Stores the Neon connection string as the app secret DATABASE_URL. Nothing goes in the repo.
-# Run it with no value on the command line, so the URL stays out of your shell history:
-read -rsp "Neon URL: " DATABASE_URL && fly secrets set DATABASE_URL="$DATABASE_URL" -a gaslit-api-production --stage; unset DATABASE_URL
+# 1. The worker gets the owner's connection string from above, and is the only app that does.
+#    Typed at a hidden prompt, so it stays out of your shell history and the repo.
+read -rsp "Neon owner URL: " DATABASE_URL && fly secrets set DATABASE_URL="$DATABASE_URL" -a gaslit-worker-production; unset DATABASE_URL
 
-# Deploy token scoped to this one app, valid for a year. Put a rotation reminder in your calendar.
-fly tokens create deploy -a gaslit-api-production -x 8760h
-```
+# 2. First worker deploy: runs the migrations, then starts the worker.
+fly deploy server --config "$PWD/deploy/fly/worker.toml" --ha=false
+fly logs -a gaslit-worker-production --no-tail | grep partitions   # "partitions: maintained for ..."
 
-The token is a GitHub secret (step 4). Optional first manual deploy, from the repo root:
+# 3. The ingest app's login, made with SQL on the worker. Its DATABASE_URL goes straight into
+#    the ingest app's secrets; the password is never shown. Rerun to rotate it.
+fly ssh console -a gaslit-worker-production -C "sh -c 'cd /srv && python -m app.db.login_role ingest'" \
+  | tr -d '\r' | grep '^DATABASE_URL=' | fly secrets import -a gaslit-api-production
+fly secrets list -a gaslit-api-production   # DATABASE_URL, shown as a digest only
 
-```bash
+# 4. Deploy tokens, one per app, valid for a year. Put a rotation reminder in your calendar.
+fly tokens create deploy -a gaslit-api-production -x 8760h      # GitHub secret FLY_API_TOKEN
+fly tokens create deploy -a gaslit-worker-production -x 8760h   # GitHub secret FLY_WORKER_API_TOKEN
+
+# 5. First ingest deploy.
 fly deploy server --config "$PWD/deploy/fly/production.toml" --ha=false
 curl https://gaslit-api-production.fly.dev/readyz   # {"status":"ok"}
 ```
 
-Every deploy first runs `alembic upgrade head` on a temporary machine (`release_command`), so
-the first one creates the tables. Until the login roles exist (M3 step 8), `DATABASE_URL` is
-Neon's owner connection string.
+From then on, the deploy workflow does steps 2 and 5 on every merge, worker first. The tokens
+go into GitHub in step 4.
 
 The first request after a quiet spell is slow: the Fly machine and the Neon compute both start
 from sleep. The deploy smoke test retries for about 30 s to cover this.
@@ -140,7 +152,7 @@ from sleep. The deploy smoke test retries for about 30 s to cover this.
 
 | Environment | Protection | Secrets | Variables |
 |---|---|---|---|
-| `production` | Required reviewer: you. Deployment branches: `main` only | `FLY_API_TOKEN` (from step 2) | `PUBLIC_URL` = `https://gaslit-api-production.fly.dev` |
+| `production` | Required reviewer: you. Deployment branches: `main` only | `FLY_API_TOKEN`, `FLY_WORKER_API_TOKEN` (from step 2) | `PUBLIC_URL` = `https://gaslit-api-production.fly.dev` |
 | `infra` | Required reviewer: you. Branches: `main` | none | none |
 
 Required reviewers on environments are free only on public repositories. If the repo goes
@@ -220,9 +232,10 @@ the TypeScript SDK starts.
 
 | Where | Name | What |
 |---|---|---|
-| Fly app secret | `DATABASE_URL` | Neon direct connection string, `sslmode=verify-full`, without `channel_binding` (step 2) |
-| Fly app secret | OAuth client IDs and secrets, session key | M4 |
-| GitHub `production` env | `FLY_API_TOKEN`, var `PUBLIC_URL` | Deploy token, smoke-test URL |
+| Fly secret, worker app | `DATABASE_URL` | Neon's owner connection string (direct), `sslmode=verify-full`, without `channel_binding` (step 2) |
+| Fly secret, ingest app | `DATABASE_URL` | The same with the `gaslit_ingest` login, made by `app.db.login_role` (step 2) |
+| Fly secret, ingest app | OAuth client IDs and secrets, session key | M4 |
+| GitHub `production` env | `FLY_API_TOKEN`, `FLY_WORKER_API_TOKEN`, var `PUBLIC_URL` | Deploy tokens (one per app), smoke-test URL |
 | GitHub repo secrets | `CLOUDFLARE_API_TOKEN`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Terraform |
 | GitHub repo vars | `CLOUDFLARE_ZONE_ID`, `R2_ENDPOINT`, `PRODUCTION_ENABLED`, `INFRA_ENABLED` | Terraform and on/off switches |
 | Cloudflare | R2 bucket `gaslit-tfstate`, DNSSEC, registrar lock | Terraform state, domain safety |
@@ -234,9 +247,12 @@ the TypeScript SDK starts.
 - **Roll back:** run `fly releases -a gaslit-api-production --image` to find the previous image, then
   `fly deploy --config "$PWD/deploy/fly/production.toml" --image <that image>` from the repo root. Afterwards, revert the commit on
   `main` so the next deploy does not bring the bug back.
-- **Logs:** `fly logs -a gaslit-api-production`.
+- **Logs:** `fly logs -a gaslit-api-production`, and `-a gaslit-worker-production` for
+  migrations and upkeep.
 - **Connect to the database:** the SQL editor in Neon's dashboard, or `psql` with the
   connection string. Unlike Fly's private network, Neon is reachable from the internet, protected
   by its password and TLS. Check Neon's IP allow-list options before M7 (ADR 0007).
-- **Rotate the deploy token:** create a new one (step 2), update the GitHub secret, then revoke
-  the old one with `fly tokens list` and `fly tokens revoke <id>`.
+- **Rotate a deploy token:** create a new one (step 2), update the GitHub secret, then revoke
+  the old one with `fly tokens list -a <app>` and `fly tokens revoke <id>`.
+- **Rotate the ingest login's password:** rerun step 2.3. The ingest app restarts with the new
+  secret. The owner's password: reset it in Neon, then repeat step 2.1 with the new URL.

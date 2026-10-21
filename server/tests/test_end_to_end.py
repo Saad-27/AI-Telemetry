@@ -27,6 +27,7 @@ import uvicorn
 
 from app.core.config import Settings
 from app.dashboard.repository import Filters, MetricsRepository, Sums
+from app.db.login_role import login_url, set_login
 from app.db.partitions import ensure_partitions
 from app.db.totals import FIVE_MINUTES, HOUR, build, built_through, ceil, floor
 from app.ingest.keys import generate
@@ -63,10 +64,12 @@ def finish(process: subprocess.Popen[str]) -> tuple[str, str]:
 
 @pytest.fixture(scope="module")
 def server(database_url: str) -> Iterator[str]:
-    """The whole app, as deployed, on a free local port."""
+    """The whole app, as deployed, on a free local port: logged in as a member of
+    ingest_writer, so every query it makes must be allowed to that role (ADR 0026)."""
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
-    app = create_app(Settings(database_url=database_url))
+    url = login_url(database_url, "ingest", asyncio.run(ingest_login(database_url)))
+    app = create_app(Settings(database_url=url))
     uv = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
     thread = threading.Thread(target=uv.run, kwargs={"sockets": [sock]})
     thread.start()
@@ -79,6 +82,14 @@ def server(database_url: str) -> Iterator[str]:
         uv.should_exit = True
         thread.join()
         sock.close()
+
+
+async def ingest_login(database_url: str) -> str:
+    conn = await asyncpg.connect(database_url)
+    try:
+        return await set_login(conn, "ingest")
+    finally:
+        await conn.close()
 
 
 async def new_account(database_url: str) -> tuple[UUID, str]:

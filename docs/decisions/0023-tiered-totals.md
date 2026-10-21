@@ -2,6 +2,7 @@
 
 - **Status:** accepted (Saad, 2026-10-18). Replaces ADR 0008's "sum at read time, no rollups"
   and the brief's every-minute `rollups_1m` worker (§9.5).
+  "Who builds" is replaced by [0026](0026-worker-app-and-login-roles.md): the worker, hourly.
 - **Date:** 2026-10-18
 
 ## Context

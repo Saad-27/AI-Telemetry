@@ -1,15 +1,15 @@
 """Day partitions for the data tables, and retention (brief §9.4, ADR 0013, ADR 0020, ADR 0023).
 
-`maintain` creates the partitions for yesterday through DAYS_AHEAD days from now, so a missed
-run is harmless for a week, builds the dashboard's totals, and drops the days past retention.
-The app runs it at startup and once each UTC day (`maintain_daily`). By hand, as the schema
-owner: `python -m app.db.partitions` (`make migrate` does).
+`maintain` creates the partitions for yesterday through DAYS_AHEAD days from now, so missed
+runs are harmless for a week, builds the dashboard's totals, and drops the days past retention.
+The worker runs it at startup and then every hour (`maintain_every`, app.worker, ADR 0026), as
+the schema owner. Once by hand: `python -m app.db.partitions` (`make migrate` does).
 """
 
 import asyncio
 import logging
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from datetime import UTC, date, datetime, timedelta
 
@@ -18,7 +18,6 @@ import asyncpg
 from app.core.config import load_settings
 from app.core.entitlements import longest_retention_days
 from app.core.metrics import PARTITIONS_MAINTAINED
-from app.db import DB_TIMEOUT_S
 from app.db.totals import DETAIL_DAYS, build, built_through
 
 log = logging.getLogger(__name__)
@@ -31,10 +30,12 @@ PARTITIONED = {
     "totals_1h": "bucket",
 }
 DAYS_AHEAD = 7
-CHECK_S = 3600.0  # how often the app checks whether a new UTC day has begun
+# How often the worker runs `maintain`. Each run wakes an idle database for about 5 minutes,
+# and the newest hour or so of a dashboard read comes from per-minute summaries (ADR 0026).
+EVERY_S = 3600.0
 # Creating or dropping a partition locks its parent table, which queues inserts behind it.
-# Giving up after this keeps ingest's wait well under its own query timeout; the next day's
-# run tries again.
+# Giving up after this keeps ingest's wait well under its own query timeout; the next run
+# tries again.
 LOCK_TIMEOUT = "1s"
 _ADVISORY_LOCK = 20_020  # any fixed number: one machine at a time runs the DDL
 
@@ -129,27 +130,28 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-async def maintain_daily(
-    pool: asyncpg.Pool,
+async def maintain_every(
+    database_url: str,
     keep_days: int,
-    check_s: float = CHECK_S,
+    every_s: float = EVERY_S,
     clock: Callable[[], datetime] = _utc_now,
+    connect: Callable[[str], Awaitable[asyncpg.Connection]] = asyncpg.connect,
 ) -> None:
-    """Runs `maintain` now, then whenever a new UTC day has begun. At most one run a day, so
-    an idle database is woken at most once a day. A failed run is retried at the next check."""
-    done: date | None = None
+    """Runs `maintain` now and then every `every_s`, each time on a new connection, so none is
+    left open between runs. A failed run is retried at the next one."""
     while True:
         now = clock()
-        if (day := now.date()) != done:
+        try:
+            conn = await connect(database_url)
             try:
-                async with pool.acquire(timeout=DB_TIMEOUT_S) as conn:
-                    if await maintain(conn, now, keep_days):
-                        PARTITIONS_MAINTAINED.set_to_current_time()
-                done = day
-            except Exception as exc:
-                # Type only: driver messages can quote connection details.
-                log.warning("partitions: maintenance failed (%s)", type(exc).__name__)
-        await asyncio.sleep(check_s)
+                if await maintain(conn, now, keep_days):
+                    PARTITIONS_MAINTAINED.set_to_current_time()
+            finally:
+                await conn.close()
+        except Exception as exc:
+            # Type only: driver messages can quote connection details.
+            log.warning("partitions: maintenance failed (%s)", type(exc).__name__)
+        await asyncio.sleep(every_s)
 
 
 async def _main() -> None:

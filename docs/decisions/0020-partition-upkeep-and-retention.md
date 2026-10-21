@@ -1,6 +1,7 @@
 # 0020: Partition upkeep and retention run inside the app, once a day
 
 - **Status:** accepted. Retention per table, and building totals before dropping: [0023](0023-tiered-totals.md)
+  Where it runs (the worker app, hourly) is replaced by [0026](0026-worker-app-and-login-roles.md).
 - **Date:** 2026-10-18
 
 ## Context

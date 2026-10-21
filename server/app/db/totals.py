@@ -4,9 +4,9 @@ The dashboard reads totals for the past and per-minute summaries only for the ne
 so a read costs about the same for any range, whatever an account's traffic or number of app
 processes. Totals hold every series column, so every dashboard filter still applies.
 
-- Each 5-minute bucket is built BUILD_AFTER after it ends, for every project at once, by
-  whichever machine is receiving summaries (`Totals`) or by the daily upkeep
-  (app.db.partitions). An hour is built from its twelve buckets once they are all built.
+- Buckets are built for every project at once by the worker's hourly upkeep
+  (app.db.partitions, ADR 0026), from BUILD_AFTER after they end. An hour is built from its
+  twelve buckets once they are all built.
 - A summary that arrives after its bucket may have been built is late (an SDK sending a backlog
   after an outage). Ingest marks its project and bucket in `totals_stale`, and the next build
   rebuilds both from the summaries.
@@ -14,26 +14,21 @@ processes. Totals hold every series column, so every dashboard filter still appl
   hour it falls in. Reads use totals before it and summaries after it, so they are right
   whether a build has run or not, only slower.
 
-Builds run as the schema owner, like partition upkeep: they read every project's summaries.
+Builds run as the schema owner, in the worker only: they read every project's summaries.
 """
 
-import asyncio
 import logging
-import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 
 import asyncpg
 
-from app.core.metrics import TOTALS_BUILD_SECONDS, TOTALS_BUILDS
-from app.db import DB_TIMEOUT_S
-from app.ingest.schema import DECODE_BUCKETS, ERROR_CLASSES, LATENCY_BUCKETS, Summary
+from app.ingest.schema import DECODE_BUCKETS, ERROR_CLASSES, LATENCY_BUCKETS
 
 FIVE_MINUTES = timedelta(minutes=5)
 HOUR = timedelta(hours=1)
 # Buckets and chart steps are counted from here, so they fall on round UTC times.
 ORIGIN = datetime(2000, 1, 1, tzinfo=UTC)
-_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _ORIGIN_SQL = "'2000-01-01T00:00:00+00'"
 # A bucket is built this long after it ends. The SDK sends a minute's summaries about 2 s after
 # it ends, so nearly all have arrived.
@@ -45,7 +40,6 @@ LATE_AFTER = timedelta(minutes=2)
 # 48 to 72 hours. Late summaries are accepted for 24 hours (ADR 0016), so their bucket can
 # always be rebuilt. Hourly totals are kept for the plan's retention.
 DETAIL_DAYS = 2
-CHECK_S = 60.0  # how often a machine that is receiving summaries checks for a bucket to build
 BUILD_TIMEOUT_S = 60.0  # per statement; after a long pause a build covers many buckets
 _LOCK = 20_023  # one machine at a time builds
 
@@ -205,69 +199,3 @@ async def build(
 async def _run(conn: asyncpg.Connection, statements: Sequence[str], *args: object) -> None:
     for sql in statements:
         await conn.execute(sql, *args, timeout=BUILD_TIMEOUT_S)
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
-def _minute(ms: int) -> datetime:
-    return _EPOCH + timedelta(milliseconds=ms)
-
-
-class Totals:
-    """Builds while this machine receives summaries, so it never wakes an idle database: the
-    buckets this machine received are built within CHECK_S of being ready."""
-
-    def __init__(
-        self, pool: asyncpg.Pool, check_s: float = CHECK_S, clock: Callable[[], datetime] = _now
-    ) -> None:
-        self._pool = pool
-        self._check_s = check_s
-        self._clock = clock
-        self._newest: datetime | None = None  # end of the newest bucket received here
-        self._marked = False  # late summaries received here since the last build
-        self._built: datetime | None = None
-
-    def note(self, summaries: Sequence[Summary]) -> None:
-        """Called by ingest once summaries are stored."""
-        if not summaries:
-            return
-        end = floor(_minute(max(s.minute for s in summaries)), FIVE_MINUTES) + FIVE_MINUTES
-        self._newest = end if self._newest is None else max(self._newest, end)
-        if late_buckets([_minute(min(s.minute for s in summaries))], self._clock()):
-            self._marked = True
-
-    def due(self, now: datetime) -> bool:
-        if self._marked:
-            return True
-        if self._newest is None:
-            return False
-        return self._built is None or self._built < min(self._newest, ready_through(now))
-
-    async def build_every(self) -> None:
-        while True:
-            await asyncio.sleep(self._check_s)
-            if self.due(self._clock()):
-                await self.build()
-
-    async def build(self) -> None:
-        marked, self._marked = self._marked, False  # marks made while building wait for the next
-        started = time.perf_counter()
-        try:
-            async with self._pool.acquire(timeout=DB_TIMEOUT_S) as conn:
-                built = await build(conn, self._clock())
-        except Exception as exc:
-            self._marked |= marked
-            TOTALS_BUILDS.labels("failed").inc()
-            # Type only: driver messages can quote row values or connection details.
-            log.warning("totals: build failed (%s)", type(exc).__name__)
-            return
-        finally:
-            TOTALS_BUILD_SECONDS.observe(time.perf_counter() - started)
-        if built is None:  # another machine is building; check again next time
-            self._marked |= marked
-            TOTALS_BUILDS.labels("locked").inc()
-            return
-        self._built = built
-        TOTALS_BUILDS.labels("ok").inc()
