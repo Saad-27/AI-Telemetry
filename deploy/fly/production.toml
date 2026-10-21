@@ -21,9 +21,11 @@ primary_region = "fra" # D12: EU-hosted
   port = 9091
   path = "/metrics"
 
-# Added in M3, when Alembic exists: migrations run once per deploy, before new machines start.
-# [deploy]
-#   release_command = "alembic upgrade head"
+# Migrations run once per deploy on a temporary machine with the app's secrets, before new
+# machines start. If one fails, the deploy stops and the running version stays. The app makes
+# this week's partitions itself at startup (ADR 0020).
+[deploy]
+  release_command = "alembic upgrade head"
 
 [http_service]
   internal_port = 8000

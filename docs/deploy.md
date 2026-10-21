@@ -111,6 +111,10 @@ fly deploy server --config "$PWD/deploy/fly/production.toml" --ha=false
 curl https://gaslit-api-production.fly.dev/readyz   # {"status":"ok"}
 ```
 
+Every deploy first runs `alembic upgrade head` on a temporary machine (`release_command`), so
+the first one creates the tables. Until the login roles exist (M3 step 8), `DATABASE_URL` is
+Neon's owner connection string.
+
 The first request after a quiet spell is slow: the Fly machine and the Neon compute both start
 from sleep. The deploy smoke test retries for about 30 s to cover this.
 
