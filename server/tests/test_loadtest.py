@@ -59,3 +59,33 @@ def test_client_sends_the_edge_header_and_speaks_https(loadtest: ModuleType) -> 
     https = loadtest.Client("https://gaslit-api-production.fly.dev", 1, 5.0)
     assert https._port == 443 and https._ssl is not None
     assert loadtest.Client("http://127.0.0.1:8001", 1, 5.0)._ssl is None
+
+
+def test_client_reads_chunked_answers_on_a_kept_connection(loadtest: ModuleType) -> None:
+    # Through Cloudflare the app's answers arrive chunked; the next answer must still parse.
+    answers = [
+        b"HTTP/1.1 401 Unauthorized\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b'5\r\n{"err\r\n7;ext=1\r\nor":1}\n\r\n0\r\n\r\n',
+        b"HTTP/1.1 429 Too Many Requests\r\nTransfer-Encoding: chunked\r\n\r\n"
+        b"2\r\n{}\r\n0\r\nTrailer: x\r\n\r\n",
+    ]
+    connections: list[None] = []
+
+    async def serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connections.append(None)
+        for answer in answers:
+            await reader.readuntil(b"\r\n\r\n")
+            await reader.readexactly(len(b"body"))
+            writer.write(answer)
+            await writer.drain()
+        writer.close()
+
+    async def main() -> list[int]:
+        server = await asyncio.start_server(serve, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        async with server:
+            client = loadtest.Client(f"http://127.0.0.1:{port}", 1, 5.0)
+            return [await client.post("gl_live_x", b"body") for _ in answers]
+
+    assert asyncio.run(main()) == [401, 429]
+    assert len(connections) == 1

@@ -4,8 +4,14 @@ Open-source SDK plus a hosted dashboard that answers "is it me, or the model pro
 using metadata from your app's own AI model calls. No prompts, outputs or keys are ever
 collected. See [PROJECT_BRIEF.md](PROJECT_BRIEF.md) for the full design.
 
-**Status:** M2 (SDK integrations) in progress. The Python SDK measures `openai` and
-`anthropic` calls automatically and anything else through `track()`. Nothing is hosted yet.
+**Status:** M3 (ingest and storage) done; M4 (dashboard) next. The Python SDK measures
+`openai` and `anthropic` calls automatically and anything else through `track()`. Ingest is
+hosted at `https://ingest.gaslit.dev`.
+
+**Capacity** on the smallest production setup (one Fly `shared-cpu-1x` machine, Neon 0.25 CU),
+2026-10-21: about 25-30 requests/s (55-65 records/s) indefinitely, and at least 300
+requests/s (675 records/s) at p95 45 ms while the machine's CPU burst balance lasts; the limit
+was not reached. Method and details: [docs/capacity.md](docs/capacity.md).
 
 ## Layout
 

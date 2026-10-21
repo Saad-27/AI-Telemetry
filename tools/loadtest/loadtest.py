@@ -165,7 +165,7 @@ class Client:
         if not line:  # closed before answering
             raise ConnectionResetError
         status = int(line.split()[1])
-        length, keep = 0, True
+        length, keep, chunked = 0, True, False
         while (line := await reader.readline()) not in (b"\r\n", b""):
             name, _, value = line.decode("latin-1").partition(":")
             name = name.strip().lower()
@@ -173,7 +173,17 @@ class Client:
                 length = int(value)
             elif name == "connection" and value.strip().lower() == "close":
                 keep = False
-        await reader.readexactly(length)
+            elif name == "transfer-encoding" and "chunked" in value.lower():
+                chunked = True
+        if not chunked:
+            await reader.readexactly(length)
+            return status, keep
+        # Cloudflare re-sends the app's answers chunked; unread chunks would be taken for the
+        # next answer on this connection.
+        while size := int((await reader.readline()).split(b";")[0], 16):
+            await reader.readexactly(size + 2)  # the chunk and its CRLF
+        while await reader.readline() not in (b"\r\n", b""):  # trailers
+            pass
         return status, keep
 
 
