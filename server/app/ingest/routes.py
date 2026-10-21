@@ -1,8 +1,9 @@
 """POST /v1/ingest (brief §9.2, §11.5, ADR 0016).
 
 Cheapest checks first: headers, then whether the machine is keeping up (ADR 0025), then the key
-(format and checksum before any database work), then the quota and rate limit (from memory,
-ADR 0017), then the body under hard size caps, then validation, then one insert per record type.
+(format and checksum before any database work; a key not cached waits while its IP has sent
+too many invalid ones, ADR 0028), then the quota and rate limit (from memory, ADR 0017), then
+the body under hard size caps, then validation, then one insert per record type.
 Logs never include bodies, keys, headers or driver error text: only codes, counts and types.
 Every answer is counted in the metrics by status and reason code (ADR 0021).
 """
@@ -17,6 +18,7 @@ import pydantic_core
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from starlette.requests import ClientDisconnect
 
 from app.core.entitlements import entitlements
 from app.core.metrics import BATCH_RECORDS, INSERT_SECONDS, RECORDS, REQUEST_SECONDS, REQUESTS
@@ -80,12 +82,19 @@ async def ingest(request: Request) -> JSONResponse:
 async def _ingest(request: Request, encoding: str, started: float) -> JSONResponse:
     state = request.app.state
     key = _bearer(request.headers.get("authorization"))
-    try:
-        found = await state.keys.resolve(key) if key else None
-    except Exception as exc:
-        return _unavailable(started, exc)
+    found = state.keys.cached(key) if key else None
     if found is None:
-        return _reply(started, 401, "invalid_key", {"WWW-Authenticate": "Bearer"})
+        # Behind Cloudflare this is CF-Connecting-IP, set by EdgeOnly (ADR 0028).
+        ip = request.client.host if request.client else ""
+        if wait := state.invalid_keys.wait_s(ip):
+            return _reply(started, 429, "too_many_invalid_keys", {"Retry-After": _seconds(wait)})
+        try:
+            found = await state.keys.resolve(key) if key else None
+        except Exception as exc:
+            return _unavailable(started, exc)
+        if found is None:
+            state.invalid_keys.charge(ip)
+            return _reply(started, 401, "invalid_key", {"WWW-Authenticate": "Bearer"})
     limits = entitlements(found.plan)
     if wait := state.quota.wait_s(found.user_id, limits):
         wait = min(wait, QUOTA_RETRY_AFTER_S)
@@ -97,7 +106,12 @@ async def _ingest(request: Request, encoding: str, started: float) -> JSONRespon
         state.rate.charge(found.user_id, math.ceil(size / REJECTED_BYTES_PER_TOKEN))
         return _reply(started, status, code)
 
-    body = await _read(request, MAX_BODY)
+    try:
+        body = await _read(request, MAX_BODY)
+    except ClientDisconnect:
+        # The client gave up mid-body (an SDK timing out under load): nobody hears the answer,
+        # so one log line and a metric instead of a traceback. 499 as in nginx's logs.
+        return _reply(started, 499, "disconnected")
     if body is None:
         return rejected(413, "too_large", MAX_BODY)
     if encoding == "gzip":

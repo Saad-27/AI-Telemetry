@@ -15,6 +15,10 @@ DEAD_DB = "postgresql://nobody:x@127.0.0.1:1/none"
 def _app(*secrets: str) -> FastAPI:
     app = create_app(Settings(database_url=DEAD_DB, edge_secrets=secrets))
 
+    @app.get("/client")
+    async def client(request: Request) -> str | None:
+        return request.client.host if request.client else None
+
     @app.get("/headers")
     async def headers(request: Request) -> list[str]:
         return list(request.headers)
@@ -42,6 +46,18 @@ def test_lets_cloudflare_through_and_hides_the_secret() -> None:
     assert resp.status_code == 200
     assert "x-other" in resp.json()
     assert "x-gaslit-edge" not in resp.json()
+
+
+def test_client_ip_comes_from_cloudflare_only_behind_the_check() -> None:
+    ip = {"cf-connecting-ip": "2001:db8::7"}
+    with TestClient(_app(SECRET)) as client:
+        assert (
+            client.get("/client", headers={"x-gaslit-edge": SECRET, **ip}).json()
+            == ip["cf-connecting-ip"]
+        )
+        assert client.get("/client", headers={"x-gaslit-edge": SECRET}).json() == "testclient"
+    with TestClient(_app()) as client:  # no check: anyone could set the header
+        assert client.get("/client", headers=ip).json() == "testclient"
 
 
 def test_healthz_stays_open_for_fly_checks() -> None:

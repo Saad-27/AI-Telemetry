@@ -3,6 +3,10 @@
 `gaslit-api-production.fly.dev` reaches the app directly, around Cloudflare's firewall and
 per-IP rate limit. Cloudflare adds a secret header to every request it forwards; without it,
 the app answers 403 before routing. Pure ASGI: about 2 µs per request either way.
+
+On requests that pass, Cloudflare's `CF-Connecting-IP` becomes the request's client address,
+so per-IP limits see the real sender. Only then can it be trusted: Cloudflare overwrites the
+header, but a request straight to Fly could carry any value.
 """
 
 import hmac
@@ -11,6 +15,7 @@ from collections.abc import Iterable
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 HEADER = b"x-gaslit-edge"  # set by Terraform (infra/terraform/main.tf)
+CLIENT_IP = b"cf-connecting-ip"
 # Fly's health checks reach the machine directly, without the header. Liveness only: no
 # database work, so open to anyone.
 OPEN_PATHS = frozenset({"/healthz"})
@@ -32,12 +37,14 @@ class EdgeOnly:
         if scope["type"] != "http" or scope["path"] in OPEN_PATHS:
             await self.app(scope, receive, send)
             return
-        given = b""
+        given = client = b""
         kept = []
         for name, value in scope["headers"]:
             if name == HEADER:
                 given = value
             else:
+                if name == CLIENT_IP:
+                    client = value
                 kept.append((name, value))
         # compare_digest: timing must not reveal how much of a guess was right.
         if not any(hmac.compare_digest(given, s) for s in self.secrets):
@@ -45,4 +52,7 @@ class EdgeOnly:
             await send({"type": "http.response.body", "body": _BODY})
             return
         # The app never sees the secret, so no later log or error report can leak it.
-        await self.app({**scope, "headers": kept}, receive, send)
+        scope = {**scope, "headers": kept}
+        if client:
+            scope["client"] = (client.decode("latin-1"), 0)  # Cloudflare does not pass the port
+        await self.app(scope, receive, send)

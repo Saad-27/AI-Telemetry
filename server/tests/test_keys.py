@@ -223,3 +223,15 @@ async def test_lookups_pass_this_months_usage_on(pool: FakePool, clock: Clock) -
     clock.now += 60
     await store.resolve(KEY.key)
     assert learned == [(pool.rows[KEY.key_hash]["user_id"], date(2026, 10, 1), 5, 9)]
+
+
+@pytest.mark.anyio
+async def test_cached_answers_only_from_memory(pool: FakePool, clock: Clock) -> None:
+    store = KeyStore(pool, ttl_s=60, clock=clock)
+    assert store.cached(KEY.key) is None  # needs a lookup
+    assert store.cached("gl_live_" + "0" * 49) is None
+    expected = await store.resolve(KEY.key)
+    assert store.cached(KEY.key) == expected
+    clock.now += 60
+    assert store.cached(KEY.key) is None
+    assert pool.queries == 1

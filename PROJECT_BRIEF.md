@@ -1110,7 +1110,7 @@ Both must be protected. The checklist in 11.11 must be fully ticked before publi
   - check `Content-Length` (≤ 1 MB)
   - stream-decompress gzip with a hard 2 MB cap; a rejected body is charged to the account's rate limit by its size ([ADR 0025](docs/decisions/0025-load-shedding-and-rejected-body-charges.md))
   - check key format and checksum before any database work
-  - apply a per-IP rate limit to invalid-key attempts
+  - apply a per-IP rate limit to invalid-key attempts ([ADR 0028](docs/decisions/0028-per-ip-limit-on-invalid-keys.md): the IP is `CF-Connecting-IP`, trusted only behind the edge check; keys already cached skip it)
 - **Strict schema** (Section 6.4): `extra="forbid"`, enums, regexes, numeric ranges and a timestamp window. This guarantees no content-like or oversized strings can be stored, and protects the dashboard from stored XSS.
 - **SQL:** parameterised only. Never build SQL from strings.
 - **Back-pressure:** request timeouts and bounded concurrency. If the database is slow, return `503` with `Retry-After` instead of queueing without limit. **Built in M3 step 7** ([ADR 0025](docs/decisions/0025-load-shedding-and-rejected-body-charges.md)): past 50 requests in progress, ingest answers `429 overloaded` with a random 3-10 s `Retry-After`, because the SDK keeps a batch after a 429 but drops it after three 5xx. A slow or unreachable database still gets `503`.
