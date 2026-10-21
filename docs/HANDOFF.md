@@ -3,7 +3,7 @@
 Read this at the start of every session, after `CLAUDE.md`. Update it at the end of every
 session, in the same PR as the session's other changes, so it reaches `main`.
 
-**Last updated:** 2026-10-21 (M3 step 8: Cloudflare, Terraform, certificates and the edge secret live; per-IP limit on invalid keys next)
+**Last updated:** 2026-10-21 (M3: per-IP limit on invalid keys, quiet disconnects, load generator ready for Fly; Saad's Fly run and the alerts decision left)
 
 ## Where the project is
 
@@ -23,14 +23,23 @@ session, in the same PR as the session's other changes, so it reaches `main`.
   `main` after Saad approves. `*.fly.dev` answers 403 (edge secret, ADR 0027). Production only,
   no staging (ADR 0006). Saad chose `shared-cpu-1x` until there are many users.
 - **In progress: M3** (ingest and storage). Steps 1-7 merged (#32-#40); step 8 hosting is live
-  (#41-#46 and the edge-secret PR). **To finish M3** (Saad, 2026-10-21, in this order):
-  1. Per-IP limit on invalid keys, trusting `CF-Connecting-IP` (only requests that passed the
-     edge check reach the app now).
-  2. Load test against Fly and Neon: the generator needs TLS and the `X-Gaslit-Edge` header
-     first (plain HTTP only today); Saad runs it from his machine; the number goes in the
-     README (`docs/capacity.md`, "How to rerun").
-  3. Leftovers: quiet `ClientDisconnect` tracebacks; whether a machine that scaled to zero
-     restarts with only a small burst balance; Grafana alerts from runbook step 2.
+  (#41-#48). **To finish M3** (Saad, 2026-10-21, in this order):
+  1. **Done, branch `m3-finish`:** per-IP limit on invalid keys (ADR 0028). `EdgeOnly` makes
+     `CF-Connecting-IP` the client address, only behind the edge check. Keys already cached skip
+     the check; others wait (`429 too_many_invalid_keys`) while their IP's bucket (20, one per
+     2 s, IPv6 per /64) is empty. Locally: 200 unknown keys/s → DB lookups ~0.5/s after a first
+     burst of ~70, DB CPU 0.17 → 0.02. **Numbers for Saad to confirm.**
+  2. **Generator ready, Saad runs it:** HTTPS, `X-Gaslit-Edge` from `EDGE_SECRET` in the
+     environment, `setup --no-history` (history would rewind everyone's totals), `cleanup`
+     (deletes `load%@localhost` accounts and their rows; checked locally). Commands in
+     `docs/capacity.md`, "At step 8". Then put the number in the README.
+  3. Leftovers: `ClientDisconnect` **done** (`499 disconnected`, one log line). The
+     stopped-machine burst balance is part of Saad's run (capacity.md). **Alerts: paused (Saad,
+     2026-10-21: new product, revisit later).** Not an M3 blocker. When revisited, the
+     proposal was 4 alerts: ingest unreachable from outside (needs an external uptime check),
+     503s over ~5% for 5 min, no worker upkeep in 3 h, quota flushes failing; the rest on a
+     dashboard. Fly's docs say "Fly.io doesn't include built-in alerting on metrics"; options:
+     fly-metrics.net's UI (unchecked), Grafana Cloud free tier, or a check in the worker.
 - **Then M4**, the website: mockup for Saad's approval first, OAuth apps (runbook step 7),
   projects and keys, dashboard. See "Dashboard direction" below.
 
@@ -60,6 +69,7 @@ session, in the same PR as the session's other changes, so it reaches `main`.
 | 0025 | Load shedding: past 50 ingest requests in progress, `429 overloaded` with a random 3-10 s `Retry-After` (not 503: the SDK drops a batch after three 5xx). `MAX_DECOMPRESSED` 2 MB; a rejected body costs the account one rate-limit token per KB (corrupt gzip: the cap). No per-request limit per account (Saad) |
 | 0026 | **Worker app** `gaslit-worker-production` (no public port, always running, ~$2/month) alone holds Neon's owner URL: migrations as its `release_command`, `maintain` (partitions, totals, retention) at start and hourly. Ingest logs in as `gaslit_ingest` (member of `ingest_writer`), made by `python -m app.db.login_role ingest` over `fly ssh console`, piped into `fly secrets import`. Ingest no longer builds totals. Deploy: worker first, own token each |
 | 0027 | `*.fly.dev` bypass closed by a secret header: Cloudflare sets `X-Gaslit-Edge` (Terraform, sensitive var `edge_secret` from GitHub secret `EDGE_SECRET`); the app (`app/core/edge.py`) answers 403 without it, except `/healthz`, and strips it. On when the Fly secret `EDGE_SECRET` is set; two space-separated values during a rotation. Infra workflow can now be run by hand |
+| 0028 | Per-IP limit on invalid keys: `CF-Connecting-IP` is the client address only behind the edge check; cached keys skip the limit; 20 per IP, one per 2 s, IPv6 per /64; `429 too_many_invalid_keys` (not 401, which stops the SDK). Client disconnects mid-body → `499 disconnected`. Proposed: numbers for Saad |
 | 0011 | Anthropic integration: same approach, shared code in `_wrap.py`; `messages.stream()` measured by wrapping the manager's enter; in-stream `error` events classified by type; input tokens include the prompt cache; Bedrock ARNs reduced to the public model id or `bedrock-arn` (confirmed); `anthropic` 0.28+ supported |
 
 ## Platform status (outside the repo)
@@ -209,7 +219,8 @@ session, in the same PR as the session's other changes, so it reaches `main`.
    `app/core/edge.py`, `Settings.edge_secrets` (`EDGE_SECRET`), `require_edge_secret` in
    `create_app` (worker exempt), `tests/test_edge.py`. **Certificates:** behind the proxy Fly
    needs `_fly-ownership` TXT and `_acme-challenge` CNAME per host (`hosts` in
-   `terraform.tfvars`). **Still open:** the three "To finish M3" items at the top.
+   `terraform.tfvars`). **Then:** per-IP limit and generator (ADR 0028, branch `m3-finish`);
+   what is left is in "To finish M3" at the top.
 
 ## Dashboard direction (Saad, 2026-10-17; for M4, and steps 6-7 now)
 
@@ -309,8 +320,7 @@ source, not memory, before relying on it (brief §17).
   2026-10-18 (restored the branch, reopened, retargeted).
 
 - **Security config:** `docs/security-config.md` lists every setting that keeps users'
-  data safe, with status. Check it at each step. The `*.fly.dev` bypass stays open until
-  runbook step 6.4 sets `EDGE_SECRET` on Fly (ADR 0027).
+  data safe, with status. Check it at each step.
 
 - `sdk/python/src/gaslit/_config.py`: `DEFAULT_ENDPOINT` is still `https://ingest.gaslit.invalid`
   with a stale "until the name is chosen" comment. Change it to `https://ingest.gaslit.dev`
@@ -324,6 +334,11 @@ source, not memory, before relying on it (brief §17).
   was not on the WSL path (Docker Desktop not running or its WSL integration off), so the DB
   tests ran against a portable Postgres 17.10 in the session scratchpad, with `DATABASE_URL`
   set (`make db` then skips compose).
+- Work in a git worktree (`git worktree add ../AI-Telemetry-m3 ...`) so Saad's compose server,
+  which hot-reloads the main checkout, stays on `main`. In a worktree, `make test` tries to start
+  a second compose Postgres (port clash): run `DATABASE_URL=postgresql://app:app@127.0.0.1:5432/app
+  make test` to use his running one (tests use `gaslit_test`), and `docker compose -p <dir> down
+  -v` if a stray project was made.
 - Docker works in WSL again (2026-10-18, step 7). The load-test stack runs beside compose
   (Postgres :5433, app :8001, metrics :9092, network `gaslit-load`); `tools/loadtest/run.sh down`
   removes it. It never touches the dev database.

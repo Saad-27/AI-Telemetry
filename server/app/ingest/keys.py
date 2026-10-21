@@ -143,9 +143,8 @@ class KeyStore:
             return None
         key_hash = hash_key(key)
         now = self._clock()
-        cached = self._cache.get(key_hash)
-        if cached is not None and (cached[0] > now or self._keep(cached[1])):
-            return cached[1]
+        if (found := self._served(key_hash, now)) is not None:
+            return found
         async with self._pool.acquire(timeout=DB_TIMEOUT_S) as conn:
             row = await conn.fetchrow(_TOUCH, key_hash, timeout=DB_TIMEOUT_S)
         KEY_LOOKUPS.labels("missing" if row is None else "found").inc()
@@ -160,3 +159,16 @@ class KeyStore:
         # Expiry counts from before the query, so a revocation is never served for longer.
         self._cache[key_hash] = (now + self._ttl_s, found)
         return found
+
+    def cached(self, key: str) -> IngestKey | None:
+        """The key, if `resolve` would answer it from memory; None if it would need the
+        database or the key is malformed."""
+        if not well_formed(key):
+            return None
+        return self._served(hash_key(key), self._clock())
+
+    def _served(self, key_hash: bytes, now: float) -> IngestKey | None:
+        cached = self._cache.get(key_hash)
+        if cached is not None and (cached[0] > now or self._keep(cached[1])):
+            return cached[1]
+        return None

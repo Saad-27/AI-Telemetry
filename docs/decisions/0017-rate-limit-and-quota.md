@@ -117,8 +117,6 @@ Things that shape the design:
   question.
 - Not verified: whether Neon counts indexes in storage (the sizes above include them, so they
   are the high end), and how much restore history our writes produce.
-- The per-IP limit on invalid keys (§11.5) is not built. It needs a client IP the app can
-  trust, which depends on closing the Cloudflare bypass at step 8 (`docs/security-config.md`).
-  Until then, made-up keys with a valid checksum cost one indexed lookup each, and Cloudflare's
-  per-IP limit caps them.
+- The per-IP limit on invalid keys (§11.5) came at step 8, once the Cloudflare bypass was
+  closed: ADR 0028.
 - The checks add about 4 µs per request (measured), against ~0.5 ms for a typical batch.

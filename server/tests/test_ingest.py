@@ -17,11 +17,12 @@ from fastapi.testclient import TestClient
 from httpx2 import Response
 from prometheus_client import REGISTRY
 from records import envelope, gzipped, sample, summary
+from starlette.types import Message, Scope
 
 from app.core.config import Settings
 from app.core.entitlements import FREE
 from app.ingest.keys import IngestKey, generate
-from app.ingest.limits import Quota, RateLimiter
+from app.ingest.limits import INVALID_BURST, InvalidKeys, Quota, RateLimiter
 from app.ingest.routes import (
     MAX_BODY,
     MAX_DECOMPRESSED,
@@ -44,8 +45,14 @@ OCT_END = datetime(2026, 10, 31, 23, 59, tzinfo=UTC).timestamp()
 class FakeKeys:
     def __init__(self) -> None:
         self.error: Exception | None = None
+        self.warm = False  # whether KEY is in the cache
+        self.lookups = 0
+
+    def cached(self, key: str) -> IngestKey | None:
+        return FOUND if self.warm and key == KEY.key else None
 
     async def resolve(self, key: str) -> IngestKey | None:
+        self.lookups += 1
         if self.error:
             raise self.error
         return FOUND if key == KEY.key else None
@@ -95,6 +102,7 @@ def app_client(clock: Clock, ticks: Clock, metrics_port: int | None = None) -> I
         app.state.keys = FakeKeys()
         app.state.sink = RecordingSink()
         app.state.rate = RateLimiter(clock=ticks)
+        app.state.invalid_keys = InvalidKeys(clock=ticks)
         # Never flushed: the lifespan flushes the quota it made, which stays empty.
         app.state.quota = Quota(app.state.pool, clock=clock)
         yield client
@@ -162,6 +170,29 @@ def test_bad_keys_get_401(client: TestClient, authorization: str | None) -> None
     assert resp.headers["WWW-Authenticate"] == "Bearer"
     assert resp.json() == {"error": "invalid_key"}
     assert sink(client).writes == []
+
+
+def test_too_many_invalid_keys_from_one_ip_skip_the_lookup(
+    client: TestClient, ticks: Clock
+) -> None:
+    for key in [None, "nope", generate().key] * INVALID_BURST:
+        resp = post(client, envelope(), key=key)
+        if resp.status_code == 429:
+            break
+        assert resp.status_code == 401
+    lookups = keys(client).lookups
+    assert resp.json() == {"error": "too_many_invalid_keys"}
+    assert resp.headers["Retry-After"] == "2"
+    # Every key that would need the database waits, valid ones too: 429 makes the SDK retry.
+    assert post(client, envelope(), key=generate().key).status_code == 429
+    assert post(client, envelope()).status_code == 429
+    assert keys(client).lookups == lookups
+    keys(client).warm = True  # a key already cached is still served
+    assert post(client, envelope()).status_code == 202
+    keys(client).warm = False
+    ticks.now += 2
+    assert post(client, envelope()).status_code == 202
+    assert keys(client).lookups == lookups + 1
 
 
 def test_bearer_scheme_is_case_insensitive(client: TestClient) -> None:
@@ -458,3 +489,45 @@ def test_logs_and_responses_never_hold_keys_or_content(
     for text in [caplog.text, *bodies]:
         assert SENTINEL not in text
         assert KEY.key not in text
+
+
+@pytest.mark.anyio
+async def test_client_gone_mid_body_is_one_log_line(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    messages: list[Message] = [
+        {"type": "http.request", "body": b'{"summaries": [', "more_body": True},
+        {"type": "http.disconnect"},
+    ]
+    sent: list[Message] = []
+
+    async def receive() -> Message:
+        return messages.pop(0)
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    scope: Scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/ingest",
+        "raw_path": b"/v1/ingest",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", f"Bearer {KEY.key}".encode()),
+        ],
+        "client": ("192.0.2.1", 1234),
+        "server": ("testserver", 80),
+    }
+    before = metric("gaslit_ingest_requests_total", status="499", reason="disconnected")
+    caplog.set_level(logging.INFO)
+    await client.app(scope, receive, send)
+    assert sent[0]["status"] == 499
+    assert metric("gaslit_ingest_requests_total", status="499", reason="disconnected") == before + 1
+    assert "ingest 499 disconnected" in caplog.text
+    assert "Traceback" not in caplog.text and sink(client).writes == []

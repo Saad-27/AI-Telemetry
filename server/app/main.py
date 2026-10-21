@@ -12,7 +12,7 @@ from app.core.config import Settings, load_settings, require_edge_secret
 from app.core.edge import EdgeOnly
 from app.db import DB_TIMEOUT_S
 from app.ingest.keys import KeyStore
-from app.ingest.limits import Quota, RateLimiter
+from app.ingest.limits import InvalidKeys, Quota, RateLimiter
 from app.ingest.routes import router as ingest_router
 from app.ingest.sink import PostgresSink
 
@@ -37,6 +37,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.keys = KeyStore(app.state.pool, keep=quota.blocks, learn=quota.learn)
         app.state.sink = PostgresSink(app.state.pool)
         app.state.rate = RateLimiter()
+        app.state.invalid_keys = InvalidKeys()  # per client IP (ADR 0028)
         app.state.in_flight = 0  # ingest requests being handled; capped to shed load (ADR 0025)
         flusher = asyncio.create_task(quota.flush_every())
         # Partitions, totals and retention run in the worker (app.worker), which alone holds

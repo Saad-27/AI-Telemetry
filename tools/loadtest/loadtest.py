@@ -4,6 +4,11 @@
            and a week of summaries for two of them, so dashboard reads have history to sum
     run    sends traffic at fixed rates, then prints status codes and latency per interval and
            per step, and optionally the CPU of Docker containers and the database's WAL
+    cleanup  deletes the accounts `setup` made, with their keys and data
+
+`run` speaks HTTP or HTTPS. With EDGE_SECRET in its environment it sends the `X-Gaslit-Edge`
+header, so it can reach the deployed app at `*.fly.dev` around Cloudflare's per-IP limit
+(ADR 0027, docs/capacity.md "How to rerun").
 
 Open loop: each request leaves at its scheduled time whether or not earlier ones have been
 answered, and its latency counts from that time. A slow server shows up as latency, not as a
@@ -21,6 +26,7 @@ import multiprocessing
 import os
 import random
 import secrets
+import ssl
 import subprocess
 import threading
 import time
@@ -101,10 +107,16 @@ class Client:
     """Keep-alive connections, at most `conns` at once, like Fly's proxy in front of the app.
     A request waiting for a connection is still on the clock."""
 
-    def __init__(self, url: str, conns: int, timeout_s: float) -> None:
+    def __init__(self, url: str, conns: int, timeout_s: float, edge_secret: str = "") -> None:
         parts = urlsplit(url)
-        self._host, self._port = parts.hostname or "127.0.0.1", parts.port or 80
+        tls = parts.scheme == "https"
+        self._host = parts.hostname or "127.0.0.1"
+        self._port = parts.port or (443 if tls else 80)
+        # Certificates are checked, as the SDK does.
+        self._ssl = ssl.create_default_context() if tls else None
         self._head = f"POST /v1/ingest HTTP/1.1\r\nHost: {parts.netloc}\r\n"
+        if edge_secret:
+            self._head += f"X-Gaslit-Edge: {edge_secret}\r\n"
         self._slots = asyncio.Semaphore(conns)
         self._idle: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
         self._timeout_s = timeout_s
@@ -125,7 +137,7 @@ class Client:
                     return await self._send(conn, request)
                 except ConnectionResetError:
                     continue
-            conn = await asyncio.open_connection(self._host, self._port)
+            conn = await asyncio.open_connection(self._host, self._port, ssl=self._ssl)
             return await self._send(conn, request)
 
     async def _send(
@@ -190,7 +202,7 @@ def _worker(
 async def _send_all(
     url: str, keys: list[str], streams: list[Stream], step_s: float, args: dict[str, Any]
 ) -> list[Result]:
-    client = Client(url, args["conns"], args["timeout_s"])
+    client = Client(url, args["conns"], args["timeout_s"], args["edge_secret"])
     loop = asyncio.get_running_loop()
     start = loop.time() + (args["start"] - time.time())  # the same instant in every process
     junk = _junk_bodies()
@@ -215,6 +227,7 @@ async def _send_all(
         key, data, records = body(kind)
         try:
             status = await client.post(key, data)
+        # ssl.SSLError is an OSError.
         except (OSError, TimeoutError, asyncio.IncompleteReadError, ValueError, IndexError):
             status = 0
         results.append((kind, at - start, loop.time() - at, status, records))
@@ -387,7 +400,15 @@ def run(args: argparse.Namespace) -> None:
     steps = len(streams[0].rates)
     start = time.time() + 2  # time for the processes to start
     duration = steps * args.step_s
-    shared = {"conns": args.conns, "timeout_s": args.timeout_s, "procs": args.procs, "start": start}
+    shared = {
+        "conns": args.conns,
+        "timeout_s": args.timeout_s,
+        "procs": args.procs,
+        "start": start,
+        # The first value, if two are set during a rotation. From the environment, never the
+        # command line, which other users and the shell history can see.
+        "edge_secret": next(iter(os.environ.get("EDGE_SECRET", "").split()), ""),
+    }
     database_url = os.environ.get("DATABASE_URL")
 
     cpu_before = {c: _cpu_s(c) for c in args.containers}
@@ -477,17 +498,48 @@ async def setup(args: argparse.Namespace) -> None:
         path = Path(args.keys)
         path.touch(mode=0o600)
         path.write_text("".join(f"{p['id']} {k.key}\n" for p, k in zip(projects, new, strict=True)))
-        # History, as measured in ADR 0022: a busy account (12 summaries a minute, 121k a
-        # week) and a typical one (2 a minute, 20k).
-        now = datetime.now(UTC).replace(second=0, microsecond=0)
-        week = now - timedelta(days=7)
-        for project, per_minute in ((projects[0]["id"], 12), (projects[1]["id"], 2)):
-            await conn.execute(_HISTORY, project, week, now, per_minute)
-        await conn.execute("UPDATE totals_watermark SET built_through = $1", week)
-        await build(conn, now, catch_up=True)
+        if not args.no_history:
+            # History, as measured in ADR 0022: a busy account (12 summaries a minute, 121k a
+            # week) and a typical one (2 a minute, 20k).
+            now = datetime.now(UTC).replace(second=0, microsecond=0)
+            week = now - timedelta(days=7)
+            for project, per_minute in ((projects[0]["id"], 12), (projects[1]["id"], 2)):
+                await conn.execute(_HISTORY, project, week, now, per_minute)
+            await conn.execute("UPDATE totals_watermark SET built_through = $1", week)
+            await build(conn, now, catch_up=True)
     finally:
         await conn.close()
     print(f"{args.accounts} accounts; keys in {args.keys} (busy account first)")
+
+
+async def cleanup(args: argparse.Namespace) -> None:
+    """Deletes the load accounts and everything theirs. The owner bypasses RLS."""
+    conn = await asyncpg.connect(os.environ["DATABASE_URL"])
+    try:
+        async with conn.transaction():
+            users = await conn.fetchval(
+                "SELECT array_agg(id) FROM users WHERE email LIKE 'load%@localhost'"
+            )
+            projects = await conn.fetchval(
+                "SELECT array_agg(id) FROM projects WHERE owner_user_id = ANY($1)", users
+            )
+            for statement in _CLEANUP:
+                await conn.execute(statement, projects)
+            # Keys, members and usage go with their project or account (ON DELETE CASCADE).
+            await conn.execute("DELETE FROM users WHERE id = ANY($1)", users)
+    finally:
+        await conn.close()
+    print(f"deleted {len(users or [])} load accounts and their data")
+
+
+_CLEANUP = (
+    "DELETE FROM summary_records WHERE project_id = ANY($1)",
+    "DELETE FROM call_samples WHERE project_id = ANY($1)",
+    "DELETE FROM totals_5m WHERE project_id = ANY($1)",
+    "DELETE FROM totals_1h WHERE project_id = ANY($1)",
+    "DELETE FROM totals_stale WHERE project_id = ANY($1)",
+    "DELETE FROM projects WHERE id = ANY($1)",
+)
 
 
 # Shaped like server/tests/records.py's summary; series vary by model and service.
@@ -514,6 +566,12 @@ def main() -> None:
     s = sub.add_parser("setup")
     s.add_argument("--accounts", type=int, default=1000)
     s.add_argument("--keys", required=True, help="file to write project ids and keys to")
+    s.add_argument(
+        "--no-history",
+        action="store_true",
+        help="skip the week of summaries (for production: it rewinds the totals for everyone)",
+    )
+    sub.add_parser("cleanup")
     r = sub.add_parser("run")
     r.add_argument("--url", default="http://127.0.0.1:8001")
     r.add_argument("--keys", required=True)
@@ -531,6 +589,8 @@ def main() -> None:
     args = parser.parse_args()
     if args.command == "setup":
         asyncio.run(setup(args))
+    elif args.command == "cleanup":
+        asyncio.run(cleanup(args))
     else:
         run(args)
 

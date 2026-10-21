@@ -85,10 +85,11 @@ then costs at most about $19.35 a month ($0.106 per CU-hour × 730 hours), howev
 arrives. Past its capacity, ingest slows and returns 503, and SDKs retry or drop. Storage, the
 other cost, is bounded by `entitlements()` ([ADR 0017](decisions/0017-rate-limit-and-quota.md)).
 Raise the size only when the load test or production metrics show it is needed. Metrics are in
-Fly's Grafana at fly-metrics.net once the apps are deployed (ADR 0021): set alerts there for
+Fly's Grafana at fly-metrics.net once the apps are deployed (ADR 0021). Alerts are wanted for
 no successful worker upkeep in 3 hours (`gaslit_partitions_last_success_timestamp_seconds`,
 ADR 0026), 503s, quota flush failures, ingest p95 latency over 200 ms, and dashboard query p95
-over 100 ms (ADR 0022's target).
+over 100 ms (ADR 0022's target). Fly's docs say "Fly.io doesn't include built-in alerting on
+metrics", so where they run is an open question for Saad (docs/HANDOFF.md).
 
 **Fly** ([ADR 0026](decisions/0026-worker-app-and-login-roles.md)): two apps. The worker
 holds Neon's owner connection string and runs migrations and upkeep; the ingest app logs in as

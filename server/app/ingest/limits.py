@@ -1,4 +1,5 @@
-"""The per-account rate limit and monthly quota (brief §7.2, §9.2 step 3, ADR 0017, ADR 0019).
+"""The per-account rate limit and monthly quota (brief §7.2, §9.2 step 3, ADR 0017, ADR 0019),
+and the per-IP limit on invalid keys (brief §11.5, ADR 0028).
 
 Both are checked from memory, so a request costs no extra database call. The rate limit lives
 only in this process. The quota is counted here and added to `monthly_usage` every FLUSH_S;
@@ -7,6 +8,7 @@ counts.
 """
 
 import asyncio
+import ipaddress
 import logging
 import time
 from collections.abc import Callable
@@ -24,6 +26,11 @@ log = logging.getLogger(__name__)
 
 BUCKETS_MAX = 10_000  # one bucket per account sending now
 FLUSH_S = 10.0
+# Invalid keys per client IP. The SDK stops after one 401 per process, so a burst of 20 lets a
+# small fleet with a revoked key all hear 401 at once; past it, each IP's made-up keys reach
+# the database once every 2 s.
+INVALID_BURST = 20
+INVALID_PER_S = 0.5
 
 # Rows go in sorted (user, month) order, so two machines flushing at once lock rows in the
 # same order and cannot deadlock.
@@ -70,6 +77,63 @@ class RateLimiter:
         bucket = self._buckets.get(user_id)
         if bucket is not None:
             self._buckets[user_id] = (bucket[0] - records, bucket[1])
+
+
+class InvalidKeys:
+    """Invalid keys per client IP (brief §11.5): a token bucket of INVALID_BURST attempts that
+    refills at INVALID_PER_S.
+
+    Made-up keys with a valid checksum each cost a database lookup, since only keys found are
+    cached. While an IP's bucket is empty, keys from it that are not cached are refused with
+    429 before any lookup; cached keys are still served, so others behind the same address
+    (an office or a cloud NAT) keep sending. IPv6 addresses count per /64, the block one
+    customer usually gets. Only IPs that sent invalid keys are kept, least recent dropped
+    first, so the common path costs one missed dict lookup.
+    """
+
+    def __init__(
+        self,
+        clock: Callable[[], float] = time.monotonic,
+        per_s: float = INVALID_PER_S,
+        burst: float = INVALID_BURST,
+        max_entries: int = BUCKETS_MAX,
+    ) -> None:
+        self._clock = clock
+        self._per_s = per_s
+        self._burst = burst
+        self._max_entries = max_entries
+        # Address -> (tokens, when counted). Least recently charged first.
+        self._buckets: dict[str, tuple[float, float]] = {}
+
+    def wait_s(self, ip: str) -> float:
+        """0 if the IP may try a key that needs a lookup, else the seconds until it may."""
+        bucket = self._buckets.get(_block(ip))
+        if bucket is None:
+            return 0.0
+        tokens = self._tokens(bucket)
+        return 0.0 if tokens >= 1 else (1 - tokens) / self._per_s
+
+    def charge(self, ip: str) -> None:
+        """Counts one invalid key from the IP."""
+        block = _block(ip)
+        bucket = self._buckets.pop(block, None)
+        tokens = self._burst if bucket is None else self._tokens(bucket)
+        if len(self._buckets) >= self._max_entries:
+            del self._buckets[next(iter(self._buckets))]
+        self._buckets[block] = (max(0.0, tokens - 1), self._clock())
+
+    def _tokens(self, bucket: tuple[float, float]) -> float:
+        tokens, then = bucket
+        return min(self._burst, tokens + (self._clock() - then) * self._per_s)
+
+
+def _block(ip: str) -> str:
+    if ":" not in ip:
+        return ip
+    try:
+        return str(ipaddress.IPv6Network((ip, 64), strict=False))
+    except ValueError:
+        return ip  # not an address: counted as given
 
 
 def _month(now: datetime) -> date:

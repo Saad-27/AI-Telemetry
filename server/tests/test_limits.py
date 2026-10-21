@@ -11,7 +11,7 @@ from prometheus_client import REGISTRY
 
 from app.core.entitlements import FREE, entitlements
 from app.ingest.keys import IngestKey
-from app.ingest.limits import Quota, RateLimiter
+from app.ingest.limits import InvalidKeys, Quota, RateLimiter
 
 pytestmark = pytest.mark.anyio
 
@@ -65,6 +65,44 @@ def test_buckets_are_bounded() -> None:
     rate.charge(second, 10)  # evicted: a no-op
     assert rate.wait_s(first, LIMITS) > 0
     assert rate.wait_s(second, LIMITS) == 0
+
+
+def test_invalid_keys_per_ip_refill_up_to_the_burst() -> None:
+    ticks = [0.0]
+    ips = InvalidKeys(clock=lambda: ticks[0], per_s=0.5, burst=3)
+    assert ips.wait_s("203.0.113.9") == 0  # never seen: nothing stored
+    for _ in range(3):
+        assert ips.wait_s("203.0.113.9") == 0
+        ips.charge("203.0.113.9")
+    assert ips.wait_s("203.0.113.9") == 2.0
+    assert ips.wait_s("203.0.113.10") == 0  # its own bucket
+    ticks[0] = 1.5
+    assert ips.wait_s("203.0.113.9") == 0.5
+    ticks[0] = 2.0
+    assert ips.wait_s("203.0.113.9") == 0
+    ips.charge("203.0.113.9")
+    ticks[0] = 100.0  # full again, never above the burst
+    for _ in range(3):
+        ips.charge("203.0.113.9")
+    assert ips.wait_s("203.0.113.9") > 0
+
+
+def test_invalid_keys_count_per_ipv6_64() -> None:
+    ips = InvalidKeys(clock=lambda: 0.0, burst=2)
+    ips.charge("2001:db8:1:2::1")
+    ips.charge("2001:db8:1:2:ffff::9")
+    assert ips.wait_s("2001:db8:1:2::abcd") > 0
+    assert ips.wait_s("2001:db8:1:3::1") == 0
+    ips.charge("testclient")  # not an address: counted as given
+    assert ips.wait_s("testclient") == 0
+
+
+def test_invalid_key_buckets_are_bounded() -> None:
+    ips = InvalidKeys(clock=lambda: 0.0, burst=1, max_entries=2)
+    for ip in ("192.0.2.1", "192.0.2.2", "192.0.2.3"):
+        ips.charge(ip)
+    assert ips.wait_s("192.0.2.1") == 0  # dropped, least recently charged
+    assert ips.wait_s("192.0.2.2") > 0 and ips.wait_s("192.0.2.3") > 0
 
 
 def test_quota_resets_at_the_start_of_the_utc_month() -> None:

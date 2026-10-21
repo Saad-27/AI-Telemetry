@@ -175,11 +175,11 @@ cheap one, can wait up to about 170 ms for the CPU quota (proposal 5).
 | 1 | Machine size | **Stay on `shared-cpu-1x`** ($2.53/month in `fra`) until there are many users. Watch CPU throttling in Fly's Grafana. When needed: `shared-cpu-2x` 512 MB ($5.06, ~55 req/s sustained) or `shared-cpu-4x` 1 GB ($10.13, ~110 req/s); prices from Fly's per-second rates, 2026-10-18. Still to measure at step 8: whether a machine that scales to zero starts with only the initial 5 s burst balance |
 | 2 | Shed load early | **Done** ([ADR 0025](decisions/0025-load-shedding-and-rejected-body-charges.md)). Past 50 requests in progress: `429 overloaded`, random 3-10 s `Retry-After`. 429 rather than 503, because the SDK keeps a batch after a 429 and drops it after three 5xx |
 | 3 | Rejected bodies cost their size | **Done** (ADR 0025). `MAX_DECOMPRESSED` 2 MB (a bomb now costs 4.8 ms, was 11). One rate-limit token per KB of a rejected body; corrupt gzip costs the cap |
-| 3b | Edge limits for floods | **Plan for step 8.** Cloudflare's per-IP rule (300 per 10 s) is in Terraform but is skipped while `*.fly.dev` is reachable (`security-config.md` §3). Close that gap, rerun the bad-key flood through Cloudflare, and add the app's per-IP limit on invalid keys |
+| 3b | Edge limits for floods | `*.fly.dev` closed (ADR 0027). **Done:** the app's per-IP limit on invalid keys ([ADR 0028](decisions/0028-per-ip-limit-on-invalid-keys.md)); 200 unknown keys/s from one IP now reach the database about once every 2 s after a first burst (database CPU 0.02, was 0.17). **Still to run on Fly:** the bad-key flood through Cloudflare |
 | 4 | Per-request limit per account | **Dropped.** Legitimate use should never be throttled by how it is spread over processes. A free account within its 1M calls a month sends about one request a second even across 50 processes, and the existing bucket already caps tiny requests at ~10 a second. Revisit only if Grafana shows an account abusing it |
 | 5 | Dashboard target on 0.25 CU | Open, for M4 |
 | 6 | Group inserts across requests | Later, once sustained traffic nears ~100 req/s |
-| 7 | Quiet client disconnects | Open (one-line fix) |
+| 7 | Quiet client disconnects | **Done** (ADR 0028): `499 disconnected`, one log line, no traceback |
 
 ### After the changes (same local stack)
 
@@ -219,15 +219,49 @@ tools/loadtest/run.sh app baseline  # the app at 6.25% of a core; `app burst` to
 tools/loadtest/run.sh down
 ```
 
-**At step 8 (Fly and Neon):** point `--url` at the deployed app with keys made on Neon. Leave out
-`--containers`, and read CPU, throttling and memory in Fly's Grafana. Through Cloudflare, one
-IP is blocked past 300 requests per 10 s, so steady runs above 30 req/s must go to `*.fly.dev`
-with the `X-Gaslit-Edge` header (ADR 0027); the flood runs go through Cloudflare, to check it
-blocks them. The generator speaks plain HTTP only, so it needs TLS and that header first. Then
-record:
+**At step 8 (Fly and Neon), from Saad's machine.** Through Cloudflare one IP is blocked past
+300 requests per 10 s, so steady runs go to `*.fly.dev` with the `X-Gaslit-Edge` header
+(ADR 0027); the generator sends it when `EDGE_SECRET` is in its environment, and speaks HTTPS.
+Flood runs go through Cloudflare, to check it blocks them. Leave out `--containers` and
+`--dashboard` unless noted; read CPU, throttling and memory in Fly's Grafana. Keep runs short:
+records stored count towards Neon's free 0.5 GB until `cleanup` (150 req/s for 10 minutes is
+about 70 MB).
+
+```sh
+cd server
+# Neon's owner URL (Neon console), typed at a hidden prompt. Certificates are checked against
+# the system's CA bundle, as on Fly.
+read -rsp "Neon owner URL: " DATABASE_URL && export DATABASE_URL
+export PGSSLROOTCERT=/etc/ssl/certs/ca-certificates.crt
+# The edge secret, read from the running app (woken by the first line), never typed or saved.
+curl -sf https://ingest.gaslit.dev/healthz >/dev/null
+export EDGE_SECRET=$(fly ssh console -a gaslit-api-production -q -C 'printenv EDGE_SECRET' | tr -d '\r')
+L="env PYTHONPATH=.:tests uv run python ../tools/loadtest/loadtest.py"
+K="--keys ../tools/loadtest/keys.txt"
+F="--url https://gaslit-api-production.fly.dev"
+
+# Accounts without the week of history: it would make the worker rebuild everyone's totals.
+$L setup --no-history $K
+$L run $K $F --rate 10,20,30,40 --step-s 60       # 1. steady, while the burst balance lasts
+$L run $K $F --rate 15 --step-s 600               # 2. how long the balance lasts at baseline+
+$L run $K --url https://ingest.gaslit.dev --kind unknown-key --rate 50 --step-s 30
+                                                  # 3. through Cloudflare: blocked past 30/s
+$L run $K $F --rate 20 --step-s 90 --dashboard    # 4. dashboard reads on Neon (see below)
+$L cleanup                                        # removes the load accounts and their rows
+unset DATABASE_URL EDGE_SECRET
+```
+
+For the stopped-machine question, let the app scale to zero (no traffic for a few minutes,
+`fly status -a gaslit-api-production` shows it stopped), then repeat run 2 and compare when
+throttling starts in Grafana with the first run. If run 4 fails on `SET ROLE dashboard_app`,
+Neon's owner is not a member of that role (Postgres 16+ does not make it one by default):
+`GRANT dashboard_app TO neondb_owner` once, as the owner, fixes it.
+
+Record:
 - requests/s at p95 under 200 ms;
 - how long the burst balance lasts;
 - whether a stopped machine starts with a full balance;
+- that Cloudflare blocks one IP past 30 req/s;
 - dashboard read times on real Neon.
 
 Put the number in the README (brief §9.10).
